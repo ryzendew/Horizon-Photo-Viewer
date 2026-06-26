@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Horizon Photo Viewer
+Comment=A modern photo viewer for Wayland
+Exec=horizon-photo-viewer %F
+Icon=com.horizon.photo-viewer
+Terminal=false
+Categories=Graphics;Viewer;
+StartupNotify=true
+MimeType=image/jpeg;image/png;image/gif;image/bmp;image/webp;image/tiff;image/heic;image/heif;image/avif;image/jxl;

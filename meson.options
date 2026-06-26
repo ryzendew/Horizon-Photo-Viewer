@@ -1,0 +1,16 @@
+option('jpeg', type: 'feature', value: 'enabled',
+  description: 'libjpeg-turbo JPEG decode with IDCT scaling')
+option('webp', type: 'feature', value: 'enabled',
+  description: 'WebP decode support')
+option('heif', type: 'feature', value: 'auto',
+  description: 'HEIC/HEIF decode via libheif')
+option('avif', type: 'feature', value: 'auto',
+  description: 'AVIF decode via libavif')
+option('raw', type: 'feature', value: 'auto',
+  description: 'Camera RAW decode via LibRaw')
+option('jxl', type: 'feature', value: 'auto',
+  description: 'JPEG-XL decode via libjxl')
+option('metadata', type: 'feature', value: 'auto',
+  description: 'EXIF/IPTC/XMP metadata via exiv2')
+option('color_management', type: 'feature', value: 'auto',
+  description: 'ICC color management via lcms2')
