@@ -3,6 +3,7 @@
 #include "core/config.hpp"
 #include "core/thumb_cache.hpp"
 #include "core/decode_pool.hpp"
+#include "decode/svg_render.hpp"
 #include "core/trash.hpp"
 #include "wayland/connection.hpp"
 #include "wayland/seat.hpp"
@@ -35,6 +36,32 @@ struct DecodedImage {
     int width = 0;
     int height = 0;
     int stride = 0;
+};
+
+enum class MarkupTool {
+    kPen, kLine, kArrow, kRect, kEllipse,
+    kText, kHighlight, kBlur, kNumbered, kEraser
+};
+
+struct MarkupElement {
+    MarkupTool type = MarkupTool::kPen;
+
+    // All positions in IMAGE pixel coordinates (raw, before pan/zoom)
+    std::vector<float> points_x;
+    std::vector<float> points_y;
+
+    // Rect/ellipse: x, y, w, h (image coords)
+    float rect_x = 0, rect_y = 0, rect_w = 0, rect_h = 0;
+
+    // Text
+    std::string text;
+    float text_x = 0, text_y = 0;
+    float font_size = 16;
+
+    // Style
+    uint32_t color = 0xFF0000FF;  // 0xRRGGBBAA
+    float thickness = 3.0f;
+    bool filled = false;
 };
 
 class App {
@@ -82,6 +109,10 @@ public:
     void toggle_crop();
     void apply_crop();
     void cancel_crop();
+    void toggle_markup();
+    void commit_markup();
+    void cancel_markup();
+    void undo_markup();
     void set_bg_alpha(float a);
     void set_slideshow_interval(int ms);
     void toggle_color_management();
@@ -161,6 +192,23 @@ private:
     CropHandle crop_drag_handle_ = CropNone;
     bool image_modified_ = false;
 
+    // Markup state
+    bool markup_active_ = false;
+    MarkupTool markup_tool_ = MarkupTool::kPen;
+    uint32_t markup_color_ = 0xFF0000FF; // default red, 0xRRGGBBAA
+    float markup_thickness_ = 3.0f;
+    std::vector<MarkupElement> markup_elements_;
+    std::unique_ptr<MarkupElement> markup_current_;
+    std::vector<MarkupElement> markup_undo_stack_;
+    std::vector<MarkupElement> markup_redo_stack_;
+    bool markup_drawing_ = false;
+    float markup_drag_start_x_ = 0;
+    float markup_drag_start_y_ = 0;
+    bool hue_bar_dragging_ = false;
+    float hue_bar_x_ = 0, hue_bar_y_ = 0;
+    float hue_bar_w_ = 280, hue_bar_h_ = 24;
+    int numbered_count_ = 0;
+
     // Sidebar
     bool show_sidebar_ = false;
 
@@ -191,6 +239,17 @@ private:
 
     // Cached BGRA pixels (rebuilt only when decoded_image_ changes)
     std::vector<uint8_t> bgra_cache_;
+
+    // SVG source data and cached parse for vector rendering
+    std::vector<uint8_t> svg_source_data_;
+    struct NSVGimage* svg_parsed_ = nullptr;
+    EmbeddedImage svg_embedded_;
+    // Vector cache (Cairo path rendering at display resolution, rebuilt on zoom)
+    cairo_surface_t* svg_vector_cache_ = nullptr;
+    int svg_vector_w_ = 0, svg_vector_h_ = 0;
+    bool svg_vector_pending_ = false;
+    float orig_img_w_ = 0;
+    float orig_img_h_ = 0;
 
     // Drag-to-pan state
     bool dragging_ = false;
@@ -240,6 +299,7 @@ private:
     void img_to_win(int img_x, int img_y, int& win_x, int& win_y) const;
     void win_to_img(int win_x, int win_y, int& img_x, int& img_y) const;
     void draw_crop_rect(cairo_t* cr, int win_w, int win_h);
+    void draw_markup_elements(cairo_t* cr);
     void write_png_file(const std::string& path);
     void save_dialog_(bool as_copy);
     void gen_thumb_bgra(const std::vector<uint8_t>& rgba, int w, int h,

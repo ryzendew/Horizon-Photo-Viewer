@@ -17,9 +17,17 @@ sources = files(
   'render/vulkan_surface.cpp',
   'dbus/portal_file_dialog.cpp',
   'decode/decoder.cpp',
+  'decode/svg_decoder.cpp',
   'decode/wuffs_decoder.cpp',
   'ui/overlay.cpp',
   'ui/thumbnail_strip.cpp',
+)
+
+# Third-party vendored sources
+sources += files(
+  '../third_party/tinyspline/tinyspline.c',
+  '../third_party/tinyspline/tinysplinecxx.cxx',
+  '../third_party/tinyspline/parson.c',
 )
 
 # Dependencies list for the executable

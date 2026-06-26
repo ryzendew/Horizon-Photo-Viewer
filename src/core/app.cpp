@@ -1,4 +1,5 @@
 #include "core/app.hpp"
+#include "decode/svg_render.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -21,8 +22,45 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb/stb_image_write.h"
 
+#include "psimpl/psimpl.h"
+#include "tinyspline/tinysplinecxx.h"
+#include <nanosvg/nanosvg.h>
+#include <nanosvg/nanosvgrast.h>
+
 namespace hpv {
 namespace fs = std::filesystem;
+
+static float hue_from_rgb(uint32_t rgba) {
+    float r = ((rgba >> 24) & 0xFF) / 255.0f;
+    float g = ((rgba >> 16) & 0xFF) / 255.0f;
+    float b = ((rgba >> 8) & 0xFF) / 255.0f;
+    float mx = std::max({r, g, b}), mn = std::min({r, g, b});
+    if (mx - mn < 0.001f) return 0;
+    float d = mx - mn, h;
+    if (mx == r) h = (g - b) / d + (g < b ? 6 : 0);
+    else if (mx == g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    return h / 6.0f;
+}
+
+static uint32_t hsv_to_rgb(float h, float s, float v) {
+    float c = v * s;
+    float hp = h / 60.0f;
+    float x = c * (1.0f - std::abs(fmod(hp, 2.0f) - 1.0f));
+    float r, g, b;
+    int i = (int)hp % 6;
+    if (i == 0)      { r = c; g = x; b = 0; }
+    else if (i == 1) { r = x; g = c; b = 0; }
+    else if (i == 2) { r = 0; g = c; b = x; }
+    else if (i == 3) { r = 0; g = x; b = c; }
+    else if (i == 4) { r = x; g = 0; b = c; }
+    else             { r = c; g = 0; b = x; }
+    float m = v - c;
+    return ((uint32_t)((r + m) * 255) << 24) |
+           ((uint32_t)((g + m) * 255) << 16) |
+           ((uint32_t)((b + m) * 255) << 8) |
+           0xFF;
+}
 }
 
 // Listener trampolines
@@ -65,6 +103,7 @@ App::~App() {
     if (xdg_surface_) xdg_surface_destroy(xdg_surface_);
     if (surface_) wl_surface_destroy(surface_);
     destroy_cached_strip();
+    if (svg_vector_cache_) { cairo_surface_destroy(svg_vector_cache_); svg_vector_cache_ = nullptr; }
 }
 
 bool App::init() {
@@ -119,6 +158,7 @@ bool App::init() {
     decoders_.register_decoder(std::make_unique<HeifDecoder>());
     decoders_.register_decoder(std::make_unique<AvifDecoder>());
     decoders_.register_decoder(std::make_unique<RawDecoder>());
+    decoders_.register_decoder(std::make_unique<SvgDecoder>());
     decoders_.register_decoder(std::make_unique<StbDecoder>());
 
     // Init portal file dialog
@@ -338,33 +378,154 @@ void App::present() {
 
     // --- Decoded image (constrained to content area) ---
     if (!decoded_image_.rgba.empty()) {
-        float img_w = (float)decoded_image_.width;
-        float img_h = (float)decoded_image_.height;
+        float img_w = orig_img_w_ > 0 ? orig_img_w_ : (float)decoded_image_.width;
+        float img_h = orig_img_h_ > 0 ? orig_img_h_ : (float)decoded_image_.height;
         int avail_h = win_h - (show_toolbar_ ? Overlay::kToolbarHeight : 0) - strip_h;
         float fit_scale = std::min((float)content_w / img_w, (float)avail_h / img_h) * zoom_;
         int draw_w = std::max(1, (int)(img_w * fit_scale));
         int draw_h = std::max(1, (int)(img_h * fit_scale));
-
-        cairo_surface_t* img_surf = cairo_image_surface_create_for_data(
-            bgra_cache_.data(),
-            CAIRO_FORMAT_ARGB32,
-            decoded_image_.width, decoded_image_.height,
-            decoded_image_.width * 4
-        );
 
         int offset_x = (content_w - draw_w) / 2 + (int)pan_x_;
         int offset_y = (show_toolbar_ ? Overlay::kToolbarHeight : 0) + (avail_h - draw_h) / 2 + (int)pan_y_;
 
         cairo_save(cr);
         cairo_translate(cr, offset_x, offset_y);
-        cairo_scale(cr, (double)draw_w / decoded_image_.width,
-                        (double)draw_h / decoded_image_.height);
-        cairo_set_source_surface(cr, img_surf, 0, 0);
-        cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
-        cairo_paint(cr);
-        cairo_restore(cr);
 
-        cairo_surface_destroy(img_surf);
+        if (svg_parsed_) {
+            // --- Vector cache (Cairo path rendering, crisp at any zoom) ---
+            // If cache exists at the right size, display it immediately.
+            // If size changed, display old cache scaled and schedule rebuild.
+            // If no cache yet, build it now.
+            if (svg_vector_cache_ && svg_vector_w_ == draw_w && svg_vector_h_ == draw_h) {
+                // Cache matches display size — instant display
+                cairo_set_source_surface(cr, svg_vector_cache_, 0, 0);
+                cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
+                cairo_paint(cr);
+            } else if (svg_vector_cache_) {
+                // Size mismatch — display old cache scaled, schedule rebuild
+                cairo_save(cr);
+                double sx = (double)draw_w / svg_vector_w_;
+                double sy = (double)draw_h / svg_vector_h_;
+                cairo_scale(cr, sx, sy);
+                cairo_set_source_surface(cr, svg_vector_cache_, 0, 0);
+                cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+                cairo_paint(cr);
+                cairo_restore(cr);
+                if (!svg_vector_pending_) {
+                    svg_vector_pending_ = true;
+                    render();
+                }
+            } else {
+                // First frame — build cache at display size
+                svg_vector_cache_ = cairo_image_surface_create(
+                    CAIRO_FORMAT_ARGB32, draw_w, draw_h);
+                svg_vector_w_ = draw_w;
+                svg_vector_h_ = draw_h;
+                cairo_t* vcr = cairo_create(svg_vector_cache_);
+                cairo_scale(vcr, (double)draw_w / orig_img_w_,
+                                  (double)draw_h / orig_img_h_);
+                {
+                    struct timespec tv0, tv1;
+                    clock_gettime(CLOCK_MONOTONIC, &tv0);
+                    render_svg_cairo(vcr, svg_parsed_, orig_img_w_, orig_img_h_);
+                    if (svg_embedded_.valid()) {
+                        cairo_surface_t* es = cairo_image_surface_create_for_data(
+                            svg_embedded_.bgra.data(), CAIRO_FORMAT_ARGB32,
+                            svg_embedded_.img_w, svg_embedded_.img_h,
+                            svg_embedded_.img_w * 4);
+                        cairo_save(vcr);
+                        cairo_translate(vcr, svg_embedded_.x, svg_embedded_.y);
+                        cairo_scale(vcr,
+                            (double)svg_embedded_.w / svg_embedded_.img_w,
+                            (double)svg_embedded_.h / svg_embedded_.img_h);
+                        cairo_set_source_surface(vcr, es, 0, 0);
+                        cairo_paint(vcr);
+                        cairo_surface_destroy(es);
+                        cairo_restore(vcr);
+                    }
+                    clock_gettime(CLOCK_MONOTONIC, &tv1);
+                    int64_t v_us = (tv1.tv_sec - tv0.tv_sec) * 1000000 +
+                                   (tv1.tv_nsec - tv0.tv_nsec) / 1000;
+                    std::cerr << "[svg] vector: " << v_us << " us ("
+                              << draw_w << "x" << draw_h << ")\n";
+                }
+                cairo_destroy(vcr);
+                cairo_set_source_surface(cr, svg_vector_cache_, 0, 0);
+                cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
+                cairo_paint(cr);
+            }
+
+            // If a rebuild was pending, build new cache and blit to display
+            if (svg_vector_pending_) {
+                cairo_surface_t* new_cv = cairo_image_surface_create(
+                    CAIRO_FORMAT_ARGB32, draw_w, draw_h);
+                cairo_t* vcr = cairo_create(new_cv);
+                cairo_scale(vcr, (double)draw_w / orig_img_w_,
+                                  (double)draw_h / orig_img_h_);
+                {
+                    struct timespec tv0, tv1;
+                    clock_gettime(CLOCK_MONOTONIC, &tv0);
+                    render_svg_cairo(vcr, svg_parsed_, orig_img_w_, orig_img_h_);
+                    if (svg_embedded_.valid()) {
+                        cairo_surface_t* es = cairo_image_surface_create_for_data(
+                            svg_embedded_.bgra.data(), CAIRO_FORMAT_ARGB32,
+                            svg_embedded_.img_w, svg_embedded_.img_h,
+                            svg_embedded_.img_w * 4);
+                        cairo_save(vcr);
+                        cairo_translate(vcr, svg_embedded_.x, svg_embedded_.y);
+                        cairo_scale(vcr,
+                            (double)svg_embedded_.w / svg_embedded_.img_w,
+                            (double)svg_embedded_.h / svg_embedded_.img_h);
+                        cairo_set_source_surface(vcr, es, 0, 0);
+                        cairo_paint(vcr);
+                        cairo_surface_destroy(es);
+                        cairo_restore(vcr);
+                    }
+                    clock_gettime(CLOCK_MONOTONIC, &tv1);
+                    int64_t v_us = (tv1.tv_sec - tv0.tv_sec) * 1000000 +
+                                   (tv1.tv_nsec - tv0.tv_nsec) / 1000;
+                    std::cerr << "[svg] vector: " << v_us << " us ("
+                              << draw_w << "x" << draw_h << ")\n";
+                }
+                cairo_destroy(vcr);
+                if (svg_vector_cache_)
+                    cairo_surface_destroy(svg_vector_cache_);
+                svg_vector_cache_ = new_cv;
+                svg_vector_w_ = draw_w;
+                svg_vector_h_ = draw_h;
+                svg_vector_pending_ = false;
+
+                // Blit the new cache to the display
+                cairo_set_source_surface(cr, svg_vector_cache_, 0, 0);
+                cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
+                cairo_paint(cr);
+            }
+
+            // Markup elements in image coords
+            cairo_save(cr);
+            cairo_scale(cr, (double)draw_w / orig_img_w_,
+                            (double)draw_h / orig_img_h_);
+            draw_markup_elements(cr);
+            cairo_restore(cr);
+        } else {
+            cairo_scale(cr, (double)draw_w / decoded_image_.width,
+                            (double)draw_h / decoded_image_.height);
+            cairo_surface_t* img_surf = cairo_image_surface_create_for_data(
+                bgra_cache_.data(),
+                CAIRO_FORMAT_ARGB32,
+                decoded_image_.width, decoded_image_.height,
+                decoded_image_.width * 4
+            );
+            cairo_set_source_surface(cr, img_surf, 0, 0);
+            cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_NEAREST);
+            cairo_paint(cr);
+            cairo_surface_destroy(img_surf);
+
+            // Draw markup elements (in original image coords, within the same transform)
+            draw_markup_elements(cr);
+        }
+
+        cairo_restore(cr);
     }
 
     // --- Overlay (toolbar only — info/placeholder drawn after thumbnail strip) ---
@@ -375,6 +536,8 @@ void App::present() {
     ov_state.slideshow = slideshow_;
     ov_state.show_settings = show_settings_;
     ov_state.show_sidebar = show_sidebar_;
+    ov_state.crop_active = crop_active_;
+    ov_state.markup_active = markup_active_;
     ov_state.bg_alpha = bg_alpha_;
     ov_state.zoom = zoom_;
     ov_state.image_width = decoded_image_.width;
@@ -411,6 +574,7 @@ void App::present() {
                 render();
             };
             else if (btn.label == "Crop") btn.action = [this]() { toggle_crop(); };
+            else if (btn.label == "Draw") btn.action = [this]() { toggle_markup(); };
             else if (btn.label == "Menu") btn.action = [this]() { toggle_menu(); };
         }
     }
@@ -476,6 +640,172 @@ void App::present() {
         }
         toolbar_buttons_.insert(toolbar_buttons_.end(),
                                 crop_buttons.begin(), crop_buttons.end());
+    }
+
+    // --- Markup overlay ---
+    if (markup_active_ && decoded_image_.width > 0) {
+        overlay_.render_markup_overlay(cr, win_w, win_h, ov_state);
+
+        std::vector<OverlayButton> markup_buttons;
+
+        // --- Tool submenu ---
+        int sub_x = 10;
+        int sub_y = Overlay::kToolbarHeight + 10;
+        int tool_btn_w = 56, tool_btn_h = 28;
+        const char* tool_names[] = {"Pen", "Line", "Arrow", "Rect", "Ellipse"};
+        int num_tools = 5;
+        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                               CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 12);
+        for (int i = 0; i < num_tools; i++) {
+            int tx = sub_x + i * (tool_btn_w + 4);
+            bool active = (int)markup_tool_ == i;
+            if (active) {
+                cairo_set_source_rgba(cr, m3::primary_container_r, m3::primary_container_g,
+                                      m3::primary_container_b, 1.0);
+            } else {
+                cairo_set_source_rgba(cr, m3::surface_container_high_r, m3::surface_container_high_g,
+                                      m3::surface_container_high_b, 0.9);
+            }
+            overlay_.draw_rounded_rect(cr, tx, sub_y, tool_btn_w, tool_btn_h, 6);
+            cairo_fill(cr);
+            cairo_set_source_rgba(cr, active ? m3::on_primary_container_r : m3::on_surface_r,
+                                  active ? m3::on_primary_container_g : m3::on_surface_g,
+                                  active ? m3::on_primary_container_b : m3::on_surface_b, 0.87);
+            cairo_move_to(cr, tx + 8, sub_y + 18);
+            cairo_show_text(cr, tool_names[i]);
+            markup_buttons.push_back({tx, sub_y, tool_btn_w, tool_btn_h,
+                                      "MTool" + std::to_string(i), {}});
+        }
+
+        // --- Color hue bar ---
+        hue_bar_x_ = (float)sub_x;
+        hue_bar_y_ = (float)(Overlay::kToolbarHeight + 46);
+        // Gradient stops: 7 stops across the hue wheel
+        struct { float pos; float r, g, b; } stops[] = {
+            {0.00f, 1,0,0}, {0.17f, 1,1,0}, {0.33f, 0,1,0},
+            {0.50f, 0,1,1}, {0.67f, 0,0,1}, {0.83f, 1,0,1},
+            {1.00f, 1,0,0},
+        };
+        cairo_save(cr);
+        overlay_.draw_rounded_rect(cr, hue_bar_x_, hue_bar_y_, hue_bar_w_, hue_bar_h_, 4);
+        cairo_clip(cr);
+        for (int s = 0; s < 6; s++) {
+            float x0 = hue_bar_x_ + stops[s].pos * hue_bar_w_;
+            float x1 = hue_bar_x_ + stops[s + 1].pos * hue_bar_w_;
+            cairo_pattern_t* pat = cairo_pattern_create_linear(x0, 0, x1, 0);
+            cairo_pattern_add_color_stop_rgba(pat, 0, stops[s].r, stops[s].g, stops[s].b, 1);
+            cairo_pattern_add_color_stop_rgba(pat, 1, stops[s+1].r, stops[s+1].g, stops[s+1].b, 1);
+            cairo_rectangle(cr, x0, hue_bar_y_, x1 - x0, hue_bar_h_);
+            cairo_set_source(cr, pat);
+            cairo_fill(cr);
+            cairo_pattern_destroy(pat);
+        }
+        cairo_restore(cr);
+        // Thumb showing current hue
+        {
+            float hue = hue_from_rgb(markup_color_);
+            float thumb_cx = hue_bar_x_ + hue * hue_bar_w_;
+            float thumb_cy = hue_bar_y_ + hue_bar_h_ * 0.5f;
+            cairo_set_source_rgba(cr, 1, 1, 1, 0.9);
+            cairo_arc(cr, thumb_cx, thumb_cy, 8, 0, 2 * M_PI);
+            cairo_fill(cr);
+            cairo_set_source_rgba(cr, 0, 0, 0, 0.3);
+            cairo_arc(cr, thumb_cx, thumb_cy, 8, 0, 2 * M_PI);
+            cairo_set_line_width(cr, 1.5);
+            cairo_stroke(cr);
+        }
+
+        // --- Thickness submenu ---
+        sub_y = Overlay::kToolbarHeight + 80;
+        int thick_btn_w = 56, thick_btn_h = 28;
+        float thicknesses[] = {2.0f, 4.0f, 8.0f};
+        const char* thick_labels[] = {"Thin", "Med", "Thick"};
+        for (int i = 0; i < 3; i++) {
+            int tx = sub_x + i * (thick_btn_w + 4);
+            bool active = std::abs(markup_thickness_ - thicknesses[i]) < 0.1f;
+            if (active) {
+                cairo_set_source_rgba(cr, m3::primary_container_r, m3::primary_container_g,
+                                      m3::primary_container_b, 1.0);
+            } else {
+                cairo_set_source_rgba(cr, m3::surface_container_high_r, m3::surface_container_high_g,
+                                      m3::surface_container_high_b, 0.9);
+            }
+            overlay_.draw_rounded_rect(cr, tx, sub_y, thick_btn_w, thick_btn_h, 6);
+            cairo_fill(cr);
+            cairo_set_source_rgba(cr, active ? m3::on_primary_container_r : m3::on_surface_r,
+                                  active ? m3::on_primary_container_g : m3::on_surface_g,
+                                  active ? m3::on_primary_container_b : m3::on_surface_b, 0.87);
+            cairo_move_to(cr, tx + 10, sub_y + 18);
+            cairo_show_text(cr, thick_labels[i]);
+            markup_buttons.push_back({tx, sub_y, thick_btn_w, thick_btn_h,
+                                      "MThick_" + std::to_string(i), {}});
+        }
+
+        // --- Undo button ---
+        {
+            int ux = sub_x + 3 * (thick_btn_w + 4) + 12;
+            int uy = Overlay::kToolbarHeight + 80;
+            int uw = 56, uh = 28;
+            if (!markup_elements_.empty()) {
+                cairo_set_source_rgba(cr, m3::surface_container_high_r, m3::surface_container_high_g,
+                                      m3::surface_container_high_b, 0.9);
+            } else {
+                cairo_set_source_rgba(cr, m3::surface_container_r, m3::surface_container_g,
+                                      m3::surface_container_b, 0.5);
+            }
+            overlay_.draw_rounded_rect(cr, ux, uy, uw, uh, 6);
+            cairo_fill(cr);
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
+                                  m3::on_surface_b, markup_elements_.empty() ? 0.3 : 0.87);
+            cairo_move_to(cr, ux + 14, uy + 18);
+            cairo_show_text(cr, "Undo");
+            markup_buttons.push_back({ux, uy, uw, uh, "MUndo", {}});
+        }
+
+        // Apply / Cancel floating buttons
+        int btn_w = 100, btn_h = 36;
+        int btn_y = win_h - strip_h - btn_h - 20;
+        int cx = (win_w - (btn_w * 2 + 10)) / 2;
+        cairo_set_source_rgba(cr, m3::primary_r, m3::primary_g, m3::primary_b, 0.9);
+        overlay_.draw_rounded_rect(cr, cx, btn_y, btn_w, btn_h, 8);
+        cairo_fill(cr);
+        cairo_set_source_rgba(cr, m3::on_primary_container_r, m3::on_primary_container_g,
+                              m3::on_primary_container_b, 1.0);
+        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                               CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 14);
+        cairo_move_to(cr, cx + 30, btn_y + 24);
+        cairo_show_text(cr, "Apply");
+        markup_buttons.push_back({cx, btn_y, btn_w, btn_h, "MarkupApply", {}});
+
+        cx += btn_w + 10;
+        cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                              m3::on_surface_variant_b, 0.15);
+        overlay_.draw_rounded_rect(cr, cx, btn_y, btn_w, btn_h, 8);
+        cairo_fill(cr);
+        cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
+                              m3::on_surface_b, 0.87);
+        cairo_move_to(cr, cx + 26, btn_y + 24);
+        cairo_show_text(cr, "Cancel");
+        markup_buttons.push_back({cx, btn_y, btn_w, btn_h, "MarkupCancel", {}});
+
+        for (auto& btn : markup_buttons) {
+            if (btn.label == "MarkupApply") btn.action = [this]() { commit_markup(); };
+            else if (btn.label == "MarkupCancel") btn.action = [this]() { cancel_markup(); };
+            else if (btn.label == "MTool0") btn.action = [this]() { markup_tool_ = MarkupTool::kPen; render(); };
+            else if (btn.label == "MTool1") btn.action = [this]() { markup_tool_ = MarkupTool::kLine; render(); };
+            else if (btn.label == "MTool2") btn.action = [this]() { markup_tool_ = MarkupTool::kArrow; render(); };
+            else if (btn.label == "MTool3") btn.action = [this]() { markup_tool_ = MarkupTool::kRect; render(); };
+            else if (btn.label == "MTool4") btn.action = [this]() { markup_tool_ = MarkupTool::kEllipse; render(); };
+            else if (btn.label == "MHueBar") btn.action = {}; // handled in on_pointer
+            else if (btn.label == "MThick_0") btn.action = [this]() { markup_thickness_ = 2.0f; render(); };
+            else if (btn.label == "MThick_1") btn.action = [this]() { markup_thickness_ = 4.0f; render(); };
+            else if (btn.label == "MThick_2") btn.action = [this]() { markup_thickness_ = 8.0f; render(); };
+            else if (btn.label == "MUndo") btn.action = [this]() { undo_markup(); };
+        }
+        toolbar_buttons_.insert(toolbar_buttons_.end(),
+                                markup_buttons.begin(), markup_buttons.end());
     }
 
     // --- Thumbnail strip (pushed below content area) ---
@@ -619,6 +949,9 @@ void App::on_key(const KeyEvent& ev) {
         case XKB_KEY_q:
             if (ev.ctrl) quit();
             break;
+        case XKB_KEY_z:
+            if (ev.ctrl && markup_active_) { undo_markup(); break; }
+            break;
         case XKB_KEY_o:
             if (ev.ctrl) open_file_dialog();
             break;
@@ -627,6 +960,7 @@ void App::on_key(const KeyEvent& ev) {
             toggle_fullscreen();
             break;
         case XKB_KEY_Escape:
+            if (markup_active_) { cancel_markup(); break; }
             if (crop_active_) { cancel_crop(); break; }
             if (show_menu_) { show_menu_ = false; render(); break; }
             if (show_sidebar_) { toggle_sidebar(); break; }
@@ -669,6 +1003,7 @@ void App::on_key(const KeyEvent& ev) {
             break;
         case XKB_KEY_Return:
         case XKB_KEY_KP_Enter:
+            if (markup_active_) { commit_markup(); break; }
             if (crop_active_) { apply_crop(); break; }
             break;
         case XKB_KEY_Delete:
@@ -803,7 +1138,7 @@ void App::on_pointer(const PointerEvent& ev) {
             // If click was on toolbar buttons (Apply/Cancel), let them handle it
         }
 
-        // Hit-test toolbar buttons (skip when hidden in fullscreen)
+        // Hit-test toolbar buttons first (covers markup submenus, apply/cancel)
         if (show_toolbar_) {
             for (int i = 0; i < (int)toolbar_buttons_.size(); i++) {
                 auto& btn = toolbar_buttons_[i];
@@ -813,6 +1148,38 @@ void App::on_pointer(const PointerEvent& ev) {
                     btn.action();  // triggers render(), showing press state
                     return;
                 }
+            }
+        }
+
+        // Markup mode: hue bar drag (before drawing starts)
+        if (markup_active_ && !crop_active_ && decoded_image_.width > 0 &&
+            ev.x >= hue_bar_x_ && ev.x < hue_bar_x_ + hue_bar_w_ &&
+            ev.y >= hue_bar_y_ && ev.y < hue_bar_y_ + hue_bar_h_) {
+            hue_bar_dragging_ = true;
+            float t = (ev.x - hue_bar_x_) / hue_bar_w_;
+            if (t < 0) t = 0;
+            if (t > 1) t = 1;
+            markup_color_ = hsv_to_rgb(t * 360.0f, 1.0f, 1.0f);
+            render();
+            return;
+        }
+
+        // Markup mode: start drawing (after button hit-test and hue bar so submenus take priority)
+        if (markup_active_ && !crop_active_) {
+            if (ev.y > Overlay::kToolbarHeight && decoded_image_.width > 0) {
+                int img_x, img_y;
+                win_to_img(ev.x, ev.y, img_x, img_y);
+                markup_drawing_ = true;
+                markup_drag_start_x_ = (float)img_x;
+                markup_drag_start_y_ = (float)img_y;
+                auto el = std::make_unique<MarkupElement>();
+                el->type = markup_tool_;
+                el->color = markup_color_;
+                el->thickness = markup_thickness_;
+                el->points_x.push_back((float)img_x);
+                el->points_y.push_back((float)img_y);
+                markup_current_ = std::move(el);
+                return;
             }
         }
 
@@ -867,8 +1234,73 @@ void App::on_pointer(const PointerEvent& ev) {
         if (dragging_) {
             dragging_ = false;
         }
+        if (hue_bar_dragging_) {
+            hue_bar_dragging_ = false;
+        }
         if (crop_dragging_) {
             crop_dragging_ = false;
+        }
+        if (markup_drawing_) {
+            markup_drawing_ = false;
+            if (markup_current_) {
+                auto tool = markup_current_->type;
+
+                //--- Pen: smooth with Catmull-Rom ---
+                if (tool == MarkupTool::kPen &&
+                    markup_current_->points_x.size() > 3) {
+                    auto& px = markup_current_->points_x;
+                    auto& py = markup_current_->points_y;
+                    size_t n = px.size();
+
+                    std::vector<double> sim_flat;
+                    sim_flat.reserve(n * 2);
+                    std::vector<double> raw_flat;
+                    raw_flat.reserve(n * 2);
+                    for (size_t i = 0; i < n; i++) {
+                        raw_flat.push_back((double)px[i]);
+                        raw_flat.push_back((double)py[i]);
+                    }
+                    psimpl::simplify_radial_distance<2>(raw_flat.begin(), raw_flat.end(),
+                                                        1.0, std::back_inserter(sim_flat));
+                    size_t sim_n = sim_flat.size() / 2;
+
+                    if (sim_n >= 4) {
+                        try {
+                            auto spline = tinyspline::BSpline::interpolateCatmullRom(
+                                sim_flat, 2, 0.5f);
+                            int num_samples = std::max(64, (int)sim_n * 4);
+                            auto sampled = spline.sample(num_samples);
+                            px.clear();
+                            py.clear();
+                            px.reserve(sampled.size() / 2);
+                            py.reserve(sampled.size() / 2);
+                            for (size_t i = 0; i < sampled.size(); i += 2) {
+                                px.push_back((float)sampled[i]);
+                                py.push_back((float)sampled[i + 1]);
+                            }
+                        } catch (const std::exception& e) {
+                            std::cerr << "Catmull-Rom smoothing failed: "
+                                      << e.what() << "\n";
+                        }
+                    }
+                }
+
+                //--- Rect/Ellipse: no point list needed, use rect_x/y/w/h ---
+                if (tool == MarkupTool::kRect || tool == MarkupTool::kEllipse) {
+                    markup_current_->points_x.clear();
+                    markup_current_->points_y.clear();
+                }
+
+                //--- Numbered marker: store number text ---
+                if (tool == MarkupTool::kNumbered) {
+                    numbered_count_++;
+                    markup_current_->text = std::to_string(numbered_count_);
+                }
+
+                markup_elements_.push_back(std::move(*markup_current_));
+                markup_current_.reset();
+            }
+            render();
         }
     }
 }
@@ -892,6 +1324,16 @@ void App::on_motion(int x, int y) {
         } else if (active_slider_ == &ss_interval_slider_) {
             set_slideshow_interval((int)ss_interval_slider_.value());
         }
+        return;
+    }
+
+    // 1.5 Hue bar drag
+    if (hue_bar_dragging_) {
+        float t = (x - hue_bar_x_) / hue_bar_w_;
+        if (t < 0) t = 0;
+        if (t > 1) t = 1;
+        markup_color_ = hsv_to_rgb(t * 360.0f, 1.0f, 1.0f);
+        render();
         return;
     }
 
@@ -941,6 +1383,31 @@ void App::on_motion(int x, int y) {
         if (crop_w_ > decoded_image_.width) crop_w_ = decoded_image_.width;
         if (crop_h_ > decoded_image_.height) crop_h_ = decoded_image_.height;
 
+        render();
+        return;
+    }
+
+    // 2.5 Markup draw
+    if (markup_active_ && markup_drawing_ && markup_current_) {
+        int img_x, img_y;
+        win_to_img(x, y, img_x, img_y);
+        auto tool = markup_current_->type;
+        if (tool == MarkupTool::kPen) {
+            markup_current_->points_x.push_back((float)img_x);
+            markup_current_->points_y.push_back((float)img_y);
+        } else if (tool == MarkupTool::kLine || tool == MarkupTool::kArrow) {
+            markup_current_->points_x.resize(2);
+            markup_current_->points_y.resize(2);
+            markup_current_->points_x[1] = (float)img_x;
+            markup_current_->points_y[1] = (float)img_y;
+        } else if (tool == MarkupTool::kRect || tool == MarkupTool::kEllipse) {
+            float dx = (float)img_x - markup_drag_start_x_;
+            float dy = (float)img_y - markup_drag_start_y_;
+            if (dx >= 0) { markup_current_->rect_x = markup_drag_start_x_; markup_current_->rect_w = dx; }
+            else { markup_current_->rect_x = (float)img_x; markup_current_->rect_w = -dx; }
+            if (dy >= 0) { markup_current_->rect_y = markup_drag_start_y_; markup_current_->rect_h = dy; }
+            else { markup_current_->rect_y = (float)img_y; markup_current_->rect_h = -dy; }
+        }
         render();
         return;
     }
@@ -1140,6 +1607,123 @@ void App::draw_crop_rect(cairo_t* cr, int win_w, int win_h) {
     cairo_show_text(cr, buf);
 }
 
+void App::draw_markup_elements(cairo_t* cr) {
+    if (markup_elements_.empty() && !markup_current_) return;
+
+    auto set_color = [&](const MarkupElement& el) {
+        cairo_set_source_rgba(cr,
+            ((el.color >> 24) & 0xFF) / 255.0,
+            ((el.color >> 16) & 0xFF) / 255.0,
+            ((el.color >> 8) & 0xFF) / 255.0,
+            ((el.color >> 0) & 0xFF) / 255.0);
+        cairo_set_line_width(cr, el.thickness);
+        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+        cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+    };
+
+    auto draw_pen = [&](const MarkupElement& el) {
+        if (el.points_x.size() < 2) return;
+        cairo_move_to(cr, el.points_x[0], el.points_y[0]);
+        for (size_t i = 1; i < el.points_x.size(); i++)
+            cairo_line_to(cr, el.points_x[i], el.points_y[i]);
+        cairo_stroke(cr);
+    };
+
+    auto draw_line = [&](const MarkupElement& el) {
+        if (el.points_x.size() < 2) return;
+        cairo_move_to(cr, el.points_x[0], el.points_y[0]);
+        cairo_line_to(cr, el.points_x[1], el.points_y[1]);
+        cairo_stroke(cr);
+    };
+
+    auto draw_arrow = [&](const MarkupElement& el) {
+        if (el.points_x.size() < 2) return;
+        float x1 = el.points_x[0], y1 = el.points_y[0];
+        float x2 = el.points_x[1], y2 = el.points_y[1];
+        float dx = x2 - x1, dy = y2 - y1;
+        float len = std::sqrt(dx * dx + dy * dy);
+        if (len < 1.0f) return;
+        float ux = dx / len, uy = dy / len;
+        // Shaft
+        cairo_move_to(cr, x1, y1);
+        cairo_line_to(cr, x2, y2);
+        cairo_stroke(cr);
+        // Arrowhead
+        float head_len = std::max(10.0f, el.thickness * 3.0f);
+        float head_angle = 0.45f;
+        float ax1 = x2 - ux * head_len * std::cos(head_angle) + uy * head_len * std::sin(head_angle);
+        float ay1 = y2 - uy * head_len * std::cos(head_angle) - ux * head_len * std::sin(head_angle);
+        float ax2 = x2 - ux * head_len * std::cos(head_angle) - uy * head_len * std::sin(head_angle);
+        float ay2 = y2 - uy * head_len * std::cos(head_angle) + ux * head_len * std::sin(head_angle);
+        cairo_set_line_width(cr, std::max(1.5f, el.thickness * 0.5f));
+        cairo_move_to(cr, x2, y2);
+        cairo_line_to(cr, ax1, ay1);
+        cairo_move_to(cr, x2, y2);
+        cairo_line_to(cr, ax2, ay2);
+        cairo_stroke(cr);
+    };
+
+    auto draw_rect = [&](const MarkupElement& el) {
+        if (el.rect_w <= 0 || el.rect_h <= 0) return;
+        cairo_rectangle(cr, el.rect_x, el.rect_y, el.rect_w, el.rect_h);
+        cairo_stroke(cr);
+    };
+
+    auto draw_ellipse = [&](const MarkupElement& el) {
+        if (el.rect_w <= 0 || el.rect_h <= 0) return;
+        float cx = el.rect_x + el.rect_w * 0.5f;
+        float cy = el.rect_y + el.rect_h * 0.5f;
+        float rx = el.rect_w * 0.5f;
+        float ry = el.rect_h * 0.5f;
+        cairo_save(cr);
+        cairo_translate(cr, cx, cy);
+        cairo_scale(cr, rx, ry);
+        cairo_arc(cr, 0, 0, 1, 0, 2 * M_PI);
+        cairo_restore(cr);
+        cairo_stroke(cr);
+    };
+
+    auto draw_numbered = [&](const MarkupElement& el) {
+        if (el.points_x.size() < 1) return;
+        float cx = el.points_x[0], cy = el.points_y[0];
+        float r = std::max(12.0f, el.thickness * 3.0f);
+        cairo_arc(cr, cx, cy, r, 0, 2 * M_PI);
+        cairo_fill(cr);
+        // White border
+        cairo_set_source_rgba(cr, 1, 1, 1, 0.9);
+        cairo_set_line_width(cr, 1.5);
+        cairo_arc(cr, cx, cy, r, 0, 2 * M_PI);
+        cairo_stroke(cr);
+        // Number text
+        if (!el.text.empty()) {
+            cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                                   CAIRO_FONT_WEIGHT_BOLD);
+            cairo_set_font_size(cr, r * 0.9f);
+            cairo_text_extents_t te;
+            cairo_text_extents(cr, el.text.c_str(), &te);
+            cairo_move_to(cr, cx - te.x_advance * 0.5f, cy + te.height * 0.35f);
+            cairo_set_source_rgba(cr, 1, 1, 1, 0.9);
+            cairo_show_text(cr, el.text.c_str());
+        }
+    };
+
+    auto draw_one = [&](const MarkupElement& el) {
+        set_color(el);
+        switch (el.type) {
+        case MarkupTool::kPen:   draw_pen(el); break;
+        case MarkupTool::kLine:  draw_line(el); break;
+        case MarkupTool::kArrow: draw_arrow(el); break;
+        case MarkupTool::kRect:  draw_rect(el); break;
+        case MarkupTool::kEllipse: draw_ellipse(el); break;
+        case MarkupTool::kNumbered: draw_numbered(el); break;
+        default: draw_pen(el); break;
+        }
+    };
+
+    for (const auto& el : markup_elements_) draw_one(el);
+    if (markup_current_) draw_one(*markup_current_);
+}
+
 // --- Crop methods ---
 
 void App::toggle_crop() {
@@ -1148,6 +1732,8 @@ void App::toggle_crop() {
         return;
     }
     if (decoded_image_.width <= 0) return;
+    // Cancel markup mode if active
+    if (markup_active_) cancel_markup();
     // Initialize crop rectangle to 90% of image, centered
     crop_x_ = decoded_image_.width / 20;
     crop_y_ = decoded_image_.height / 20;
@@ -1158,7 +1744,7 @@ void App::toggle_crop() {
 }
 
 void App::apply_crop() {
-    if (!crop_active_ || decoded_image_.width <= 0) return;
+    if (!crop_active_ || decoded_image_.width <= 0 || !svg_source_data_.empty()) return;
     if (crop_w_ <= 0 || crop_h_ <= 0) { cancel_crop(); return; }
 
     int x = std::max(0, std::min(crop_x_, decoded_image_.width - 1));
@@ -1202,6 +1788,49 @@ void App::cancel_crop() {
     crop_active_ = false;
     crop_dragging_ = false;
     render();
+}
+
+// --- Markup ---
+
+void App::toggle_markup() {
+    if (markup_active_) {
+        cancel_markup();
+        return;
+    }
+    if (decoded_image_.width <= 0) return;
+    if (crop_active_) cancel_crop();
+    markup_active_ = true;
+    markup_tool_ = MarkupTool::kPen;
+    markup_color_ = 0xFF0000FF;
+    markup_thickness_ = 3.0f;
+    numbered_count_ = 0;
+    markup_current_.reset();
+    render();
+}
+
+void App::commit_markup() {
+    if (!markup_active_) return;
+    if (markup_current_) {
+        markup_elements_.push_back(std::move(*markup_current_));
+        markup_current_.reset();
+    }
+    markup_active_ = false;
+    image_modified_ = true;
+    render();
+}
+
+void App::cancel_markup() {
+    markup_active_ = false;
+    markup_current_.reset();
+    render();
+}
+
+void App::undo_markup() {
+    if (!markup_elements_.empty()) {
+        markup_redo_stack_.push_back(std::move(markup_elements_.back()));
+        markup_elements_.pop_back();
+        render();
+    }
 }
 
 // --- Menu ---
@@ -1507,6 +2136,60 @@ void App::load_image(const std::string& path) {
     std::cout << "Loaded: " << path << " (" << result.width << "x" << result.height
               << ", " << result.format_name << ")\n";
 
+    // Clean up any previous SVG state
+    if (svg_parsed_) { nsvgDelete(svg_parsed_); svg_parsed_ = nullptr; }
+    svg_embedded_ = EmbeddedImage{};
+    svg_source_data_.clear();
+    if (svg_vector_cache_) { cairo_surface_destroy(svg_vector_cache_); svg_vector_cache_ = nullptr; }
+    svg_vector_w_ = 0; svg_vector_h_ = 0; svg_vector_pending_ = false;
+    orig_img_w_ = (float)result.width;
+    orig_img_h_ = (float)result.height;
+    if (result.format_name == "SVG") {
+        if (!file_buf.empty()) {
+            svg_source_data_ = file_buf;
+        } else {
+            // Prefetch hit — re-read the file for source data
+            FILE* f = fopen(path.c_str(), "rb");
+            if (f) {
+                fseek(f, 0, SEEK_END);
+                svg_source_data_.resize(ftell(f));
+                fseek(f, 0, SEEK_SET);
+                if (fread(svg_source_data_.data(), 1, svg_source_data_.size(), f) != svg_source_data_.size())
+                    svg_source_data_.clear();
+                fclose(f);
+            }
+        }
+        // Parse and cache SVG for vector rendering
+        if (!svg_source_data_.empty()) {
+            struct timespec tp0, tp1;
+            clock_gettime(CLOCK_MONOTONIC, &tp0);
+            svg_parsed_ = svg_parse(svg_source_data_.data(), svg_source_data_.size());
+            clock_gettime(CLOCK_MONOTONIC, &tp1);
+            int64_t parse_us = (tp1.tv_sec - tp0.tv_sec) * 1000000 +
+                               (tp1.tv_nsec - tp0.tv_nsec) / 1000;
+            if (svg_parsed_) {
+                if (svg_parsed_->width > 0 && svg_parsed_->height > 0) {
+                    orig_img_w_ = svg_parsed_->width;
+                    orig_img_h_ = svg_parsed_->height;
+                    result.width = (int)svg_parsed_->width;
+                    result.height = (int)svg_parsed_->height;
+                }
+                // Extract the first embedded PNG image, if any
+                svg_embedded_ = extract_embedded_image(
+                    svg_source_data_.data(), svg_source_data_.size());
+                std::cerr << "[svg] embedded: "
+                          << (svg_embedded_.valid()
+                              ? std::to_string(svg_embedded_.img_w) + "x"
+                                + std::to_string(svg_embedded_.img_h) + " px"
+                              : "none")
+                          << "\n";
+            }
+            result.pixels = std::vector<uint8_t>(4, 0);
+            std::cerr << "[svg] parse: " << parse_us << " us, viewbox "
+                      << orig_img_w_ << "x" << orig_img_h_ << "\n";
+        }
+    }
+
     current_image_ = DecodedImage{
         .rgba = std::move(result.pixels),
         .width = result.width,
@@ -1515,24 +2198,34 @@ void App::load_image(const std::string& path) {
     };
     decoded_image_ = current_image_;
 
-    // Rebuild BGRA cache
-    size_t npix = (size_t)decoded_image_.width * decoded_image_.height;
-    bgra_cache_.resize(npix * 4);
-    for (size_t i = 0; i < npix; i++) {
-        bgra_cache_[i * 4 + 0] = decoded_image_.rgba[i * 4 + 2];
-        bgra_cache_[i * 4 + 1] = decoded_image_.rgba[i * 4 + 1];
-        bgra_cache_[i * 4 + 2] = decoded_image_.rgba[i * 4 + 0];
-        bgra_cache_[i * 4 + 3] = decoded_image_.rgba[i * 4 + 3];
+    // Rebuild BGRA cache (skipped for SVGs — rendered as vectors)
+    if (svg_source_data_.empty()) {
+        size_t npix = (size_t)decoded_image_.width * decoded_image_.height;
+        bgra_cache_.resize(npix * 4);
+        for (size_t i = 0; i < npix; i++) {
+            bgra_cache_[i * 4 + 0] = decoded_image_.rgba[i * 4 + 2];
+            bgra_cache_[i * 4 + 1] = decoded_image_.rgba[i * 4 + 1];
+            bgra_cache_[i * 4 + 2] = decoded_image_.rgba[i * 4 + 0];
+            bgra_cache_[i * 4 + 3] = decoded_image_.rgba[i * 4 + 3];
+        }
     }
 
     // Cache thumbnail for the current image
-    if (dir_image_index_ >= 0) {
+    if (dir_image_index_ >= 0 && svg_source_data_.empty()) {
         gen_thumb_bgra(decoded_image_.rgba, decoded_image_.width, decoded_image_.height,
                        thumb_cache_[dir_image_index_],
                        thumb_cache_w_[dir_image_index_],
                        thumb_cache_h_[dir_image_index_]);
     }
     invalidate_thumb_strip();
+
+    // Clear markup and crop state for new image
+    markup_elements_.clear();
+    markup_current_.reset();
+    markup_drawing_ = false;
+    markup_active_ = false;
+    crop_active_ = false;
+    crop_dragging_ = false;
 
     render();
 
@@ -1902,7 +2595,8 @@ std::vector<std::string> App::image_files_in_dir(const std::string& dir) {
         if (ext == ".jpg" || ext == ".jpeg" || ext == ".png" ||
             ext == ".gif" || ext == ".bmp" || ext == ".webp" ||
             ext == ".tiff" || ext == ".tif" || ext == ".heic" ||
-            ext == ".heif" || ext == ".avif" || ext == ".jxl") {
+            ext == ".heif" || ext == ".avif" || ext == ".jxl" ||
+            ext == ".svg") {
             result.push_back(entry.path().string());
         }
     }

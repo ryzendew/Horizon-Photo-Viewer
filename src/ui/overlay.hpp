@@ -36,6 +36,7 @@ struct OverlayState {
     bool show_sidebar = false;
     bool show_menu = false;
     bool crop_active = false;
+    bool markup_active = false;
     float bg_alpha = 1.0f;
 
     std::string filename;
@@ -79,6 +80,8 @@ public:
                         const OverlayState& state, std::vector<OverlayButton>& buttons);
     void render_crop_overlay(cairo_t* cr, int win_w, int win_h,
                              const OverlayState& state, std::vector<OverlayButton>& buttons);
+    void render_markup_overlay(cairo_t* cr, int win_w, int win_h,
+                               const OverlayState& state);
     void render_menu_popup(cairo_t* cr, int win_w, int win_h,
                            const OverlayState& state, std::vector<OverlayButton>& buttons);
     void draw_rounded_rect(cairo_t* cr, double x, double y, double w, double h, double r);
@@ -91,7 +94,7 @@ public:
 
     static constexpr int kToolbarHeight = 48;
     static constexpr int kToolbarHoverZone = 64;
-    static constexpr int kNumIcons = 12;
+    static constexpr int kNumIcons = 13;
 
 private:
     void render_placeholder(cairo_t* cr, int win_w, int win_h);

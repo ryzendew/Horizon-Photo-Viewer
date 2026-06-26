@@ -90,6 +90,14 @@ public:
     const char* name() const override { return "JPEG-XL"; }
 };
 
+class SvgDecoder : public ImageDecoder {
+public:
+    bool can_decode(const uint8_t* data, size_t size) override;
+    DecodeResult decode(const uint8_t* data, size_t size,
+                         int target_width = 0, int target_height = 0) override;
+    const char* name() const override { return "SVG"; }
+};
+
 class DecoderRegistry {
 public:
     void register_decoder(std::unique_ptr<ImageDecoder> decoder);
