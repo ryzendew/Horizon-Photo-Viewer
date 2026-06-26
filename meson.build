@@ -14,7 +14,6 @@ endif
 wl_client = dependency('wayland-client', version: '>=1.20')
 wl_protocols = dependency('wayland-protocols', version: '>=1.36')
 xkbcommon = dependency('xkbcommon', version: '>=1.5')
-vulkan = dependency('vulkan', version: '>=1.3')
 dbus_1 = dependency('dbus-1', version: '>=1.12')
 cairo = dependency('cairo', version: '>=1.16')
 threads = dependency('threads')
