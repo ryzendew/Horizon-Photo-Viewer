@@ -380,13 +380,16 @@ void App::load_image(std::string path) {
     }
     invalidate_thumb_strip();
 
-    // Clear markup and crop state for new image
+    // Clear markup, crop, and rotation state for new image
     markup_elements_.clear();
     markup_current_.reset();
     markup_drawing_ = false;
     markup_active_ = false;
     crop_active_ = false;
     crop_dragging_ = false;
+    rotation_ = 0;
+    flip_h_ = false;
+    flip_v_ = false;
 
     present();
 

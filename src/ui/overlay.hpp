@@ -25,9 +25,13 @@ inline constexpr int kIconCodepoints[] = {
     0xE945, // crop             → Crop
     0xE5D3, // more_vert        → Menu
     0xE746, // draw             → Draw
+    0xE419, // rotate_right     → RotR (mirrored from same glyph as RotL)
+    0xE419, // rotate_left      → RotL
+    0xE5C8, // flip             → Flip
 };
 inline constexpr const char* kIconLabels[] = {
     "Open", "<", ">", "+", "-", "Fit", "Full", "Play", "Gear", "Info", "Crop", "Menu", "Draw",
+    "RotR", "RotL", "Flip",
 };
 inline constexpr int8_t kToolbarLayout[] = {
     0,      // folder (Open)
@@ -44,6 +48,10 @@ inline constexpr int8_t kToolbarLayout[] = {
     -1,     // spacer
     10,     // crop
     12,     // draw (markup)
+    -1,     // spacer
+    13,     // rotate_cw
+    14,     // rotate_ccw
+    15,     // flip
 };
 inline constexpr int kNumToolbarItems = sizeof(kToolbarLayout) / sizeof(kToolbarLayout[0]);
 inline constexpr int kSettingsIconIdx = 8;
@@ -112,7 +120,8 @@ public:
                            const OverlayState& state, std::vector<OverlayButton>& buttons);
     void draw_rounded_rect(cairo_t* cr, double x, double y, double w, double h, double r);
 
-    bool init_icons(const char* font_path, const char* crop_svg_path);
+    bool init_icons(const char* font_path, const char* crop_svg_path,
+                    const char* flip_svg_path);
     void destroy_icons();
     bool crop_icon_loaded() const {
         return kNumIcons > 10 && icon_surfaces_.size() > 10 && icon_surfaces_[10] != nullptr;
@@ -120,7 +129,7 @@ public:
 
     static constexpr int kToolbarHeight = 48;
     static constexpr int kToolbarHoverZone = 64;
-    static constexpr int kNumIcons = 13;
+    static constexpr int kNumIcons = 16;
 
 private:
     void render_placeholder(cairo_t* cr, int win_w, int win_h);

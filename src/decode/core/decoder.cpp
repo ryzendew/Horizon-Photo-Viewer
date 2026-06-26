@@ -8,15 +8,11 @@ namespace hpv {
 // Magic byte detection helpers for stub implementations
 namespace {
 
-bool match_magic(const uint8_t* data, size_t size, const uint8_t* magic, size_t magic_len) {
-    if (size < magic_len) return false;
-    return std::memcmp(data, magic, magic_len) == 0;
-}
-
 #ifndef HAVE_LIBJPEG
 bool is_jpeg(const uint8_t* data, size_t size) {
-    const uint8_t jpeg_magic[] = {0xFF, 0xD8, 0xFF};
-    return match_magic(data, size, jpeg_magic, 3);
+    if (size < 3) return false;
+    const uint8_t magic[] = {0xFF, 0xD8, 0xFF};
+    return std::memcmp(data, magic, 3) == 0;
 }
 #endif
 
@@ -59,8 +55,8 @@ bool is_avif(const uint8_t* data, size_t size) {
 #ifndef HAVE_LIBJXL
 bool is_jxl(const uint8_t* data, size_t size) {
     if (size < 12) return false;
-    const uint8_t jxl_magic[] = {0x00, 0x00, 0x00, 0x0C, 0x4A, 0x58, 0x4C, 0x20, 0x0D, 0x0A, 0x87, 0x0A};
-    return match_magic(data, size, jxl_magic, 12);
+    const uint8_t magic[] = {0x00, 0x00, 0x00, 0x0C, 0x4A, 0x58, 0x4C, 0x20, 0x0D, 0x0A, 0x87, 0x0A};
+    return std::memcmp(data, magic, 12) == 0;
 }
 #endif
 

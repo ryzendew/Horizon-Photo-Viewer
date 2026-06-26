@@ -110,6 +110,10 @@ public:
     void toggle_crop();
     void apply_crop();
     void cancel_crop();
+    void rotate_90_cw();
+    void rotate_90_ccw();
+    void flip_horizontal();
+    void flip_vertical();
     void toggle_markup();
     void commit_markup();
     void cancel_markup();
@@ -192,6 +196,11 @@ private:
     enum CropHandle { CropNone, CropMove, CropTL, CropTR, CropBL, CropBR };
     CropHandle crop_drag_handle_ = CropNone;
     bool image_modified_ = false;
+
+    // Rotation / flip state
+    int rotation_ = 0;  // 0, 90, 180, 270
+    bool flip_h_ = false;
+    bool flip_v_ = false;
 
     // Markup state
     bool markup_active_ = false;

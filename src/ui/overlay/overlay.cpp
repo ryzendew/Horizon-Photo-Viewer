@@ -125,7 +125,8 @@ bool Overlay::ready_icon_from_svg(const char* svg_path, int icon_size) {
     return true;
 }
 
-bool Overlay::init_icons(const char* font_path, const char* crop_svg_path) {
+bool Overlay::init_icons(const char* font_path, const char* crop_svg_path,
+                         const char* flip_svg_path) {
     destroy_icons();
 
     FILE* f = fopen(font_path, "rb");
@@ -148,9 +149,27 @@ bool Overlay::init_icons(const char* font_path, const char* crop_svg_path) {
     for (int i = 0; i < kNumIcons; i++) {
         if (i == 10 && crop_svg_path) {
             ready_icon_from_svg(crop_svg_path, kIconSize);
+        } else if (i == 15 && flip_svg_path) {
+            ready_icon_from_svg(flip_svg_path, kIconSize);
         } else {
             ready_icon_from_codepoint(font_data_, font_size_, kIconCodepoints[i], kIconSize);
         }
+    }
+
+    // Mirror RotR icon (index 13) — shares the left-pointing codepoint with RotL
+    if (icon_surfaces_.size() > 13 && icon_surfaces_[13]) {
+        cairo_surface_t* src = icon_surfaces_[13];
+        int iw = cairo_image_surface_get_width(src);
+        int ih = cairo_image_surface_get_height(src);
+        cairo_surface_t* flipped = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, iw, ih);
+        cairo_t* cr = cairo_create(flipped);
+        cairo_scale(cr, -1, 1);
+        cairo_translate(cr, -iw, 0);
+        cairo_set_source_surface(cr, src, 0, 0);
+        cairo_paint(cr);
+        cairo_destroy(cr);
+        cairo_surface_destroy(src);
+        icon_surfaces_[13] = flipped;
     }
 
     return !icon_surfaces_.empty();

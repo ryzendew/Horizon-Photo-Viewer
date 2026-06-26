@@ -1,5 +1,6 @@
 project('horizon-photo-viewer', 'c', 'cpp',
   version: '0.1.0',
+  meson_version: '>=1.1',
   default_options: [
     'cpp_std=c++23',
     'warning_level=3',
@@ -37,6 +38,10 @@ install_data('assets/com.horizon.photo-viewer.svg',
 )
 
 install_data('assets/crop.svg',
+  install_dir: get_option('datadir') / 'horizon-photo-viewer',
+)
+
+install_data('assets/flip.svg',
   install_dir: get_option('datadir') / 'horizon-photo-viewer',
 )
 

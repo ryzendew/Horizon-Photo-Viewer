@@ -121,6 +121,9 @@ add_project_arguments('-DICON_FONT_PATH_SYSTEM="' + icon_font_system + '"', lang
 crop_svg_system = get_option('prefix') / get_option('datadir') / 'horizon-photo-viewer' / 'crop.svg'
 add_project_arguments('-DCROP_SVG_PATH_SYSTEM="' + crop_svg_system + '"', language: 'cpp')
 
+flip_svg_system = get_option('prefix') / get_option('datadir') / 'horizon-photo-viewer' / 'flip.svg'
+add_project_arguments('-DFLIP_SVG_PATH_SYSTEM="' + flip_svg_system + '"', language: 'cpp')
+
 executable('horizon-photo-viewer',
   sources,
   dependencies: deps,

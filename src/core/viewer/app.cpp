@@ -88,16 +88,21 @@ bool App::init() {
         };
         bool icons_loaded = false;
         for (const char** ip = icon_paths; *ip; ip++) {
-            const char* crop_paths[] = {
 #ifdef CROP_SVG_PATH_SYSTEM
-                CROP_SVG_PATH_SYSTEM,
+            if (overlay_.init_icons(*ip, CROP_SVG_PATH_SYSTEM,
+                                   FLIP_SVG_PATH_SYSTEM)
+                && overlay_.crop_icon_loaded()) {
+                icons_loaded = true;
+                break;
+            }
 #endif
-                "assets/crop.svg",
-                "../assets/crop.svg",
-                nullptr,
-            };
-            for (const char** cp = crop_paths; *cp; cp++) {
-                if (overlay_.init_icons(*ip, *cp) && overlay_.crop_icon_loaded()) {
+            const char* base_paths[] = { "assets/", "../assets/", nullptr };
+            for (const char** bp = base_paths; *bp; bp++) {
+                std::string base = *bp;
+                std::string crop_path = base + "crop.svg";
+                std::string flip_path = base + "flip.svg";
+                if (overlay_.init_icons(*ip, crop_path.c_str(), flip_path.c_str())
+                    && overlay_.crop_icon_loaded()) {
                     icons_loaded = true;
                     break;
                 }
@@ -105,7 +110,7 @@ bool App::init() {
             if (icons_loaded) break;
         }
         if (!icons_loaded)
-            std::cerr << "overlay: icons (font + crop svg) not found\n";
+            std::cerr << "overlay: icons (font + svg) not found\n";
     }
 
     // Register decoders up front so that if set_window_size triggers a
@@ -347,16 +352,27 @@ void App::present() {
     if (!decoded_image_.rgba.empty()) {
         float img_w = orig_img_w_ > 0 ? orig_img_w_ : (float)decoded_image_.width;
         float img_h = orig_img_h_ > 0 ? orig_img_h_ : (float)decoded_image_.height;
+
+        // Swap dimensions for 90/270 rotation so fit calculation uses the correct aspect
+        float layout_w = (rotation_ == 90 || rotation_ == 270) ? img_h : img_w;
+        float layout_h = (rotation_ == 90 || rotation_ == 270) ? img_w : img_h;
+
         int avail_h = win_h - (show_toolbar_ ? Overlay::kToolbarHeight : 0) - strip_h;
-        float fit_scale = std::min((float)content_w / img_w, (float)avail_h / img_h) * zoom_;
-        int draw_w = std::max(1, (int)(img_w * fit_scale));
-        int draw_h = std::max(1, (int)(img_h * fit_scale));
+        float fit_scale = std::min((float)content_w / layout_w, (float)avail_h / layout_h) * zoom_;
+        int draw_w = std::max(1, (int)(layout_w * fit_scale));
+        int draw_h = std::max(1, (int)(layout_h * fit_scale));
 
         int offset_x = (content_w - draw_w) / 2 + (int)pan_x_;
         int offset_y = (show_toolbar_ ? Overlay::kToolbarHeight : 0) + (avail_h - draw_h) / 2 + (int)pan_y_;
 
         cairo_save(cr);
         cairo_translate(cr, offset_x, offset_y);
+
+        // Rotation / flip around center of draw area
+        cairo_translate(cr, draw_w / 2.0, draw_h / 2.0);
+        cairo_scale(cr, flip_h_ ? -1.0 : 1.0, flip_v_ ? -1.0 : 1.0);
+        cairo_rotate(cr, rotation_ * M_PI / 180.0);
+        cairo_translate(cr, -draw_w / 2.0, -draw_h / 2.0);
 
         std::cerr << "[present] svg_doc=" << (void*)svg_doc_
                   << " cache=" << (void*)svg_vector_cache_
@@ -481,6 +497,9 @@ void App::present() {
             };
             else if (btn.label == "Crop") btn.action = [this]() { toggle_crop(); };
             else if (btn.label == "Draw") btn.action = [this]() { toggle_markup(); };
+            else if (btn.label == "RotR") btn.action = [this]() { rotate_90_cw(); };
+            else if (btn.label == "RotL") btn.action = [this]() { rotate_90_ccw(); };
+            else if (btn.label == "Flip") btn.action = [this]() { flip_horizontal(); };
             else if (btn.label == "Menu") btn.action = [this]() { toggle_menu(); };
         }
     }
@@ -911,6 +930,16 @@ void App::on_key(const KeyEvent& ev) {
         case XKB_KEY_KP_Enter:
             if (markup_active_) { commit_markup(); break; }
             if (crop_active_) { apply_crop(); break; }
+            break;
+        case XKB_KEY_r:
+            if (ev.shift) rotate_90_ccw();
+            else rotate_90_cw();
+            break;
+        case XKB_KEY_h:
+            flip_horizontal();
+            break;
+        case XKB_KEY_v:
+            flip_vertical();
             break;
         case XKB_KEY_Delete:
         case XKB_KEY_KP_Delete:
@@ -1481,6 +1510,32 @@ void App::set_default_zoom(float z) {
 void App::toggle_theme() {
     config_.theme = (config_.theme == "dark") ? "light" : "dark";
     Config::save(config_);
+    render();
+}
+
+// --- Rotation / Flip ---
+
+void App::rotate_90_cw() {
+    rotation_ = (rotation_ + 90) % 360;
+    image_modified_ = true;
+    render();
+}
+
+void App::rotate_90_ccw() {
+    rotation_ = (rotation_ - 90 + 360) % 360;
+    image_modified_ = true;
+    render();
+}
+
+void App::flip_horizontal() {
+    flip_h_ = !flip_h_;
+    image_modified_ = true;
+    render();
+}
+
+void App::flip_vertical() {
+    flip_v_ = !flip_v_;
+    image_modified_ = true;
     render();
 }
 
