@@ -18,6 +18,9 @@
 
 #include <cairo.h>
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb/stb_image_write.h"
+
 namespace hpv {
 namespace fs = std::filesystem;
 }
@@ -81,13 +84,24 @@ bool App::init() {
         };
         bool icons_loaded = false;
         for (const char** ip = icon_paths; *ip; ip++) {
-            if (overlay_.init_icons(*ip)) {
-                icons_loaded = true;
-                break;
+            const char* crop_paths[] = {
+#ifdef CROP_SVG_PATH_SYSTEM
+                CROP_SVG_PATH_SYSTEM,
+#endif
+                "assets/crop.svg",
+                "../assets/crop.svg",
+                nullptr,
+            };
+            for (const char** cp = crop_paths; *cp; cp++) {
+                if (overlay_.init_icons(*ip, *cp) && overlay_.crop_icon_loaded()) {
+                    icons_loaded = true;
+                    break;
+                }
             }
+            if (icons_loaded) break;
         }
         if (!icons_loaded)
-            std::cerr << "overlay: MaterialSymbolsRounded.ttf not found\n";
+            std::cerr << "overlay: icons (font + crop svg) not found\n";
     }
 
     // Register decoders up front so that if set_window_size triggers a
@@ -280,24 +294,33 @@ void App::present() {
     );
     cairo_t* cr = cairo_create(cs);
 
+    // --- Apply theme before drawing chrome ---
+    hpv::m3::apply_theme(config_.theme == "light");
+
     // --- Background (use SOURCE to overwrite stale buffer content) ---
     cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-    cairo_set_source_rgba(cr, 0.12, 0.12, 0.14, bg_alpha_);
+    cairo_set_source_rgba(cr, hpv::m3::surface_r, hpv::m3::surface_g,
+                          hpv::m3::surface_b, bg_alpha_);
     cairo_paint(cr);
     cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
 
-    // --- Content area width (shrunk when sidebar is open) ---
+    // --- Content area (shrunk when sidebar or thumbnail strip is visible) ---
     int content_w = win_w;
     int sidebar_w = 0;
     if (show_sidebar_) {
         sidebar_w = 320;
         content_w = win_w - sidebar_w;
     }
+    bool hide_strip = fullscreen_ || slideshow_;
+    bool strip_visible = show_thumbnails_ && (!hide_strip || show_thumbnails_hover_);
+    int strip_h = (strip_visible && decoded_image_.width > 0 && dir_images_.size() > 1)
+                      ? ThumbnailStrip::kHeight : 0;
 
     // --- Sidebar area background (painted before the image) ---
     if (show_sidebar_) {
         cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
-        cairo_set_source_rgba(cr, 0.14, 0.14, 0.16, bg_alpha_);
+        cairo_set_source_rgba(cr, hpv::m3::surface_container_r, hpv::m3::surface_container_g,
+                              hpv::m3::surface_container_b, bg_alpha_);
         cairo_rectangle(cr, content_w, 0, sidebar_w, win_h);
         cairo_fill(cr);
         cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
@@ -317,7 +340,7 @@ void App::present() {
     if (!decoded_image_.rgba.empty()) {
         float img_w = (float)decoded_image_.width;
         float img_h = (float)decoded_image_.height;
-        int avail_h = win_h - (show_toolbar_ ? Overlay::kToolbarHeight : 0);
+        int avail_h = win_h - (show_toolbar_ ? Overlay::kToolbarHeight : 0) - strip_h;
         float fit_scale = std::min((float)content_w / img_w, (float)avail_h / img_h) * zoom_;
         int draw_w = std::max(1, (int)(img_w * fit_scale));
         int draw_h = std::max(1, (int)(img_h * fit_scale));
@@ -370,7 +393,8 @@ void App::present() {
     }
 
     if (show_toolbar_) {
-        overlay_.render_toolbar(cr, win_w, win_h, toolbar_buttons_, bg_alpha_);
+        overlay_.render_toolbar(cr, win_w, win_h, toolbar_buttons_,
+                                toolbar_hover_idx_, toolbar_press_idx_, bg_alpha_);
         // Fill in button actions after render_toolbar populates geometries
         for (auto& btn : toolbar_buttons_) {
             if (btn.label == "Open") btn.action = [this]() { open_file_dialog(); };
@@ -386,12 +410,75 @@ void App::present() {
                 show_sidebar_ = !show_sidebar_;
                 render();
             };
+            else if (btn.label == "Crop") btn.action = [this]() { toggle_crop(); };
+            else if (btn.label == "Menu") btn.action = [this]() { toggle_menu(); };
         }
     }
 
-    // --- Thumbnail strip (constrained to content area) ---
-    bool hide_strip = fullscreen_ || slideshow_;
-    bool strip_visible = show_thumbnails_ && (!hide_strip || show_thumbnails_hover_);
+    // --- Menu popup ---
+    if (show_menu_) {
+        std::vector<OverlayButton> menu_buttons;
+        overlay_.render_menu_popup(cr, win_w, win_h, ov_state, menu_buttons);
+        for (auto& btn : menu_buttons) {
+            if (btn.label == "Save") btn.action = [this]() {
+                show_menu_ = false;
+                save_image();
+            };
+            else if (btn.label == "Save As") btn.action = [this]() {
+                show_menu_ = false;
+                save_as();
+            };
+            else if (btn.label == "Save As Copy") btn.action = [this]() {
+                show_menu_ = false;
+                save_as_copy();
+            };
+        }
+        toolbar_buttons_.insert(toolbar_buttons_.end(),
+                                menu_buttons.begin(), menu_buttons.end());
+    }
+
+    // --- Crop overlay ---
+    if (crop_active_ && decoded_image_.width > 0) {
+        std::vector<OverlayButton> crop_buttons;
+        overlay_.render_crop_overlay(cr, win_w, win_h, ov_state, crop_buttons);
+        // Draw the actual crop rectangle
+        draw_crop_rect(cr, win_w, win_h);
+        // Apply / Cancel floating buttons — always at the content area bottom so crop rect never obscures them
+        int btn_w = 100, btn_h = 36;
+        int btn_y = win_h - strip_h - btn_h - 20;
+        int cx = (win_w - (btn_w * 2 + 10)) / 2;
+        cairo_set_source_rgba(cr, m3::primary_r, m3::primary_g, m3::primary_b, 0.9);
+        overlay_.draw_rounded_rect(cr, cx, btn_y, btn_w, btn_h, 8);
+        cairo_fill(cr);
+        cairo_set_source_rgba(cr, m3::on_primary_container_r, m3::on_primary_container_g,
+                              m3::on_primary_container_b, 1.0);
+        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                               CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 14);
+        cairo_move_to(cr, cx + 30, btn_y + 24);
+        cairo_show_text(cr, "Apply");
+        crop_buttons.push_back({cx, btn_y, btn_w, btn_h, "CropApply", {}});
+
+        cx += btn_w + 10;
+        cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                              m3::on_surface_variant_b, 0.15);
+        overlay_.draw_rounded_rect(cr, cx, btn_y, btn_w, btn_h, 8);
+        cairo_fill(cr);
+        cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
+                              m3::on_surface_b, 0.87);
+        cairo_move_to(cr, cx + 26, btn_y + 24);
+        cairo_show_text(cr, "Cancel");
+        crop_buttons.push_back({cx, btn_y, btn_w, btn_h, "CropCancel", {}});
+
+        for (auto& btn : crop_buttons) {
+            if (btn.label == "CropApply") btn.action = [this]() { apply_crop(); };
+            else if (btn.label == "CropCancel") btn.action = [this]() { cancel_crop(); };
+        }
+        toolbar_buttons_.insert(toolbar_buttons_.end(),
+                                crop_buttons.begin(), crop_buttons.end());
+    }
+
+    // --- Thumbnail strip (pushed below content area) ---
     if (strip_visible && decoded_image_.width > 0 && dir_images_.size() > 1) {
         if (thumb_dirty_ || cached_strip_w_ != content_w) {
             destroy_cached_strip();
@@ -427,13 +514,13 @@ void App::present() {
             // Convert entry coords from strip-relative to window-relative
             // since hit-testing uses window coords
             {
-                int strip_y_win = win_h - ThumbnailStrip::kHeight;
+                int strip_y_win = win_h - strip_h;
                 for (auto& e : thumb_entries_) e.y += strip_y_win;
             }
             thumb_dirty_ = false;
         }
         // Blit cached strip
-        cairo_set_source_surface(cr, cached_strip_, 0, win_h - ThumbnailStrip::kHeight);
+        cairo_set_source_surface(cr, cached_strip_, 0, win_h - strip_h);
         cairo_paint(cr);
     }
 
@@ -442,13 +529,33 @@ void App::present() {
 
     // --- Settings popup (drawn on top of everything) ---
     if (show_settings_) {
+        // Sync M3 widget colors with current theme tokens
+        bg_alpha_slider_.setAccentColor(m3::primary_r, m3::primary_g, m3::primary_b);
+        bg_alpha_slider_.setSurfaceColor(m3::surface_r, m3::surface_g, m3::surface_b);
+        default_zoom_slider_.setAccentColor(m3::primary_r, m3::primary_g, m3::primary_b);
+        default_zoom_slider_.setSurfaceColor(m3::surface_r, m3::surface_g, m3::surface_b);
+        ss_interval_slider_.setAccentColor(m3::primary_r, m3::primary_g, m3::primary_b);
+        ss_interval_slider_.setSurfaceColor(m3::surface_r, m3::surface_g, m3::surface_b);
+        theme_toggle_.setAccentColor(m3::primary_r, m3::primary_g, m3::primary_b);
+        theme_toggle_.setOutlineColor(m3::outline_r, m3::outline_g, m3::outline_b);
+        color_mgmt_toggle_.setAccentColor(m3::primary_r, m3::primary_g, m3::primary_b);
+        color_mgmt_toggle_.setOutlineColor(m3::outline_r, m3::outline_g, m3::outline_b);
+
+        // Sync M3 widget state with config
+        bg_alpha_slider_.setValue(ov_state.bg_alpha);
+        default_zoom_slider_.setValue(ov_state.default_zoom);
+        ss_interval_slider_.setValue((float)ov_state.slideshow_interval_ms);
+        theme_toggle_.setOn(ov_state.theme == "dark");
+        color_mgmt_toggle_.setOn(ov_state.enable_color_management);
+
         std::vector<OverlayButton> settings_buttons;
-        overlay_.render_settings_popup(cr, win_w, win_h, ov_state, settings_buttons);
+        overlay_.render_settings_popup(cr, win_w, win_h, ov_state, settings_buttons,
+                                        bg_alpha_slider_, default_zoom_slider_,
+                                        ss_interval_slider_, theme_toggle_,
+                                        color_mgmt_toggle_);
         for (auto& btn : settings_buttons) {
             if (btn.label == "CloseSettings") {
                 btn.action = [this]() { toggle_settings(); };
-            } else if (btn.label == "bg_alpha") {
-                btn.action = [this]() { /* handled in on_pointer */ };
             }
         }
         toolbar_buttons_.insert(toolbar_buttons_.end(),
@@ -520,6 +627,8 @@ void App::on_key(const KeyEvent& ev) {
             toggle_fullscreen();
             break;
         case XKB_KEY_Escape:
+            if (crop_active_) { cancel_crop(); break; }
+            if (show_menu_) { show_menu_ = false; render(); break; }
             if (show_sidebar_) { toggle_sidebar(); break; }
             if (show_settings_) { toggle_settings(); break; }
             if (fullscreen_) toggle_fullscreen();
@@ -558,6 +667,10 @@ void App::on_key(const KeyEvent& ev) {
         case XKB_KEY_i:
             toggle_overlay();
             break;
+        case XKB_KEY_Return:
+        case XKB_KEY_KP_Enter:
+            if (crop_active_) { apply_crop(); break; }
+            break;
         case XKB_KEY_Delete:
         case XKB_KEY_KP_Delete:
             delete_image();
@@ -592,41 +705,44 @@ void App::on_pointer(const PointerEvent& ev) {
 
         // Settings popup hit-test takes priority
         if (show_settings_) {
-            bool hit_popup = false;
-            // Settings popup bounds (matching render_settings_popup layout)
-            int pw = 360, ph = 280;
+            int pw = 480, ph = 540;
             int px = (window_width_ - pw) / 2;
             int py = (window_height_ - ph) / 2;
-            // Check if click is inside popup
-            if (ev.x >= px && ev.x < px + pw && ev.y >= py && ev.y < py + ph) {
-                hit_popup = true;
-                // Hit-test settings buttons
-                for (auto& btn : toolbar_buttons_) {
-                    if (ev.x >= btn.x && ev.x < btn.x + btn.w &&
-                        ev.y >= btn.y && ev.y < btn.y + btn.h) {
-                        if (btn.label == "CloseSettings") {
-                            toggle_settings();
-                            return;
-                        }
-                        if (btn.label == "bg_alpha") {
-                            // Calculate alpha from slider position
-                            float a = (float)(ev.x - btn.x) / (float)btn.w;
-                            set_bg_alpha(a);
-                            return;
-                        }
-                    }
-                }
-            }
-            // Click outside popup closes it; click inside but not on a button = consume
-            if (!hit_popup) {
+
+            // Click outside popup closes it
+            if (!(ev.x >= px && ev.x < px + pw && ev.y >= py && ev.y < py + ph)) {
                 toggle_settings();
                 return;
             }
-            return; // consume click inside popup even if not on a button
-        }
 
-        // Hit-test toolbar buttons (skip when hidden in fullscreen)
-        if (show_toolbar_) {
+            // 1. M3 slider dispatch
+            if (bg_alpha_slider_.handlePointerDown(ev.x, ev.y)) {
+                active_slider_ = &bg_alpha_slider_;
+                set_bg_alpha(bg_alpha_slider_.value());
+                return;
+            }
+            if (default_zoom_slider_.handlePointerDown(ev.x, ev.y)) {
+                active_slider_ = &default_zoom_slider_;
+                set_default_zoom(default_zoom_slider_.value());
+                return;
+            }
+            if (ss_interval_slider_.handlePointerDown(ev.x, ev.y)) {
+                active_slider_ = &ss_interval_slider_;
+                set_slideshow_interval((int)ss_interval_slider_.value());
+                return;
+            }
+
+            // 2. M3 toggle dispatch
+            if (theme_toggle_.containsPoint(ev.x, ev.y)) {
+                toggle_theme();
+                return;
+            }
+            if (color_mgmt_toggle_.containsPoint(ev.x, ev.y)) {
+                toggle_color_management();
+                return;
+            }
+
+            // 3. Regular buttons (close, etc.)
             for (auto& btn : toolbar_buttons_) {
                 if (ev.x >= btn.x && ev.x < btn.x + btn.w &&
                     ev.y >= btn.y && ev.y < btn.y + btn.h && btn.action) {
@@ -634,11 +750,77 @@ void App::on_pointer(const PointerEvent& ev) {
                     return;
                 }
             }
+
+            return; // consume click inside popup even if not on a button
+        }
+
+        // Menu popup: close on outside click
+        if (show_menu_ && ev.y > Overlay::kToolbarHeight) {
+            int pw = 200, ph = 160;
+            int px = window_width_ - pw - 8;
+            int py = Overlay::kToolbarHeight + 4;
+            if (!(ev.x >= px && ev.x < px + pw && ev.y >= py && ev.y < py + ph)) {
+                show_menu_ = false;
+                render();
+                return;
+            }
+        }
+
+        // Crop mode: drag rectangle or handles
+        if (crop_active_) {
+            if (ev.y > Overlay::kToolbarHeight && decoded_image_.width > 0) {
+                int img_x, img_y;
+                win_to_img(ev.x, ev.y, img_x, img_y);
+
+                // Check corner handles (in image coords)
+                int hl = 10;
+                auto near_handle = [&](int hx, int hy) -> bool {
+                    int wx, wy;
+                    img_to_win(hx, hy, wx, wy);
+                    return abs(ev.x - wx) < hl * 2 && abs(ev.y - wy) < hl * 2;
+                };
+
+                crop_drag_handle_ = CropNone;
+                if (near_handle(crop_x_, crop_y_)) crop_drag_handle_ = CropTL;
+                else if (near_handle(crop_x_ + crop_w_, crop_y_)) crop_drag_handle_ = CropTR;
+                else if (near_handle(crop_x_, crop_y_ + crop_h_)) crop_drag_handle_ = CropBL;
+                else if (near_handle(crop_x_ + crop_w_, crop_y_ + crop_h_)) crop_drag_handle_ = CropBR;
+                else if (img_x >= crop_x_ && img_x < crop_x_ + crop_w_ &&
+                         img_y >= crop_y_ && img_y < crop_y_ + crop_h_)
+                    crop_drag_handle_ = CropMove;
+
+                if (crop_drag_handle_ != CropNone) {
+                    crop_dragging_ = true;
+                    crop_drag_start_x_ = img_x;
+                    crop_drag_start_y_ = img_y;
+                    crop_drag_orig_x_ = crop_x_;
+                    crop_drag_orig_y_ = crop_y_;
+                    crop_drag_orig_w_ = crop_w_;
+                    crop_drag_orig_h_ = crop_h_;
+                    return;
+                }
+            }
+            // If click was on toolbar buttons (Apply/Cancel), let them handle it
+        }
+
+        // Hit-test toolbar buttons (skip when hidden in fullscreen)
+        if (show_toolbar_) {
+            for (int i = 0; i < (int)toolbar_buttons_.size(); i++) {
+                auto& btn = toolbar_buttons_[i];
+                if (ev.x >= btn.x && ev.x < btn.x + btn.w &&
+                    ev.y >= btn.y && ev.y < btn.y + btn.h && btn.action) {
+                    toolbar_press_idx_ = i;
+                    btn.action();  // triggers render(), showing press state
+                    return;
+                }
+            }
         }
 
         // Hit-test thumbnail strip
-        int strip_y = window_height_ - ThumbnailStrip::kHeight;
         bool strip_visible = show_thumbnails_ && (!(fullscreen_ || slideshow_) || show_thumbnails_hover_);
+        int strip_h = (strip_visible && decoded_image_.width > 0 && dir_images_.size() > 1)
+                          ? ThumbnailStrip::kHeight : 0;
+        int strip_y = window_height_ - strip_h;
         if (strip_visible && ev.y >= strip_y && !thumb_entries_.empty()) {
             for (auto& e : thumb_entries_) {
                 if (ev.x >= e.x && ev.x < e.x + e.w &&
@@ -673,8 +855,20 @@ void App::on_pointer(const PointerEvent& ev) {
             pan_start_y_ = pan_y_;
         }
     } else if (ev.state == WL_POINTER_BUTTON_STATE_RELEASED) {
+        if (active_slider_) {
+            active_slider_->handlePointerUp(ev.x, ev.y);
+            active_slider_ = nullptr;
+            return;
+        }
+        if (toolbar_press_idx_ >= 0) {
+            toolbar_press_idx_ = -1;
+            pending_redraw_ = true;
+        }
         if (dragging_) {
             dragging_ = false;
+        }
+        if (crop_dragging_) {
+            crop_dragging_ = false;
         }
     }
 }
@@ -683,25 +877,115 @@ void App::on_motion(int x, int y) {
     pointer_x_ = x;
     pointer_y_ = y;
 
+    // 1. Active settings slider drag (highest priority)
+    if (active_slider_) {
+        if (!show_settings_) {
+            active_slider_->handlePointerUp(0, 0);
+            active_slider_ = nullptr;
+            return;
+        }
+        active_slider_->handlePointerMove(x, y);
+        if (active_slider_ == &bg_alpha_slider_) {
+            set_bg_alpha(bg_alpha_slider_.value());
+        } else if (active_slider_ == &default_zoom_slider_) {
+            set_default_zoom(default_zoom_slider_.value());
+        } else if (active_slider_ == &ss_interval_slider_) {
+            set_slideshow_interval((int)ss_interval_slider_.value());
+        }
+        return;
+    }
+
+    // 2. Crop drag
+    if (crop_active_ && crop_dragging_) {
+        if (decoded_image_.width <= 0) { crop_dragging_ = false; return; }
+        int img_x, img_y;
+        win_to_img(x, y, img_x, img_y);
+        int dx = img_x - crop_drag_start_x_;
+        int dy = img_y - crop_drag_start_y_;
+
+        int min_dim = 16;
+        switch (crop_drag_handle_) {
+        case CropMove:
+            crop_x_ = std::clamp(crop_drag_orig_x_ + dx, 0, decoded_image_.width - crop_w_);
+            crop_y_ = std::clamp(crop_drag_orig_y_ + dy, 0, decoded_image_.height - crop_h_);
+            break;
+        case CropTL:
+            crop_x_ = std::clamp(crop_drag_orig_x_ + dx, 0, crop_drag_orig_x_ + crop_drag_orig_w_ - min_dim);
+            crop_y_ = std::clamp(crop_drag_orig_y_ + dy, 0, crop_drag_orig_y_ + crop_drag_orig_h_ - min_dim);
+            crop_w_ = crop_drag_orig_w_ + (crop_drag_orig_x_ - crop_x_);
+            crop_h_ = crop_drag_orig_h_ + (crop_drag_orig_y_ - crop_y_);
+            break;
+        case CropTR:
+            crop_y_ = std::clamp(crop_drag_orig_y_ + dy, 0, crop_drag_orig_y_ + crop_drag_orig_h_ - min_dim);
+            crop_w_ = std::max(min_dim, crop_drag_orig_w_ + dx);
+            crop_h_ = crop_drag_orig_h_ + (crop_drag_orig_y_ - crop_y_);
+            break;
+        case CropBL:
+            crop_x_ = std::clamp(crop_drag_orig_x_ + dx, 0, crop_drag_orig_x_ + crop_drag_orig_w_ - min_dim);
+            crop_w_ = crop_drag_orig_w_ + (crop_drag_orig_x_ - crop_x_);
+            crop_h_ = std::max(min_dim, crop_drag_orig_h_ + dy);
+            break;
+        case CropBR:
+            crop_w_ = std::max(min_dim, crop_drag_orig_w_ + dx);
+            crop_h_ = std::max(min_dim, crop_drag_orig_h_ + dy);
+            break;
+        default: break;
+        }
+        // Clamp to image bounds
+        int max_x = decoded_image_.width - crop_w_;
+        if (crop_x_ < 0) crop_x_ = 0;
+        else if (crop_x_ > max_x) crop_x_ = max_x;
+        int max_y = decoded_image_.height - crop_h_;
+        if (crop_y_ < 0) crop_y_ = 0;
+        else if (crop_y_ > max_y) crop_y_ = max_y;
+        if (crop_w_ > decoded_image_.width) crop_w_ = decoded_image_.width;
+        if (crop_h_ > decoded_image_.height) crop_h_ = decoded_image_.height;
+
+        render();
+        return;
+    }
+
+    // 3. Toolbar button hover tracking
+    {
+        int new_hover = -1;
+        if (show_toolbar_) {
+            for (int i = 0; i < (int)toolbar_buttons_.size(); i++) {
+                auto& btn = toolbar_buttons_[i];
+                if (x >= btn.x && x < btn.x + btn.w &&
+                    y >= btn.y && y < btn.y + btn.h) {
+                    new_hover = i;
+                    break;
+                }
+            }
+        }
+        // Clear press if pointer leaves the pressed button
+        if (toolbar_press_idx_ >= 0 && new_hover != toolbar_press_idx_) {
+            toolbar_press_idx_ = -1;
+            pending_redraw_ = true;
+        }
+        if (new_hover != toolbar_hover_idx_) {
+            toolbar_hover_idx_ = new_hover;
+            pending_redraw_ = true;
+        }
+    }
+
+    // 3. Fullscreen/slideshow toolbar hover zone
     if (fullscreen_ || slideshow_) {
-        // Toolbar hover at top with 2s dismiss delay
         bool in_zone = y < Overlay::kToolbarHoverZone;
         if (in_zone) {
             if (!show_toolbar_) {
                 show_toolbar_ = true;
                 pending_redraw_ = true;
             }
-            toolbar_hide_time_ = 0; // cancel pending hide
+            toolbar_hide_time_ = 0;
             return;
         }
         if (show_toolbar_ && toolbar_hide_time_ == 0) {
-            // Just left hover zone — start timer
             struct timespec ts;
             clock_gettime(CLOCK_MONOTONIC, &ts);
             toolbar_hide_time_ = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
         }
 
-        // Thumbnail strip hover at bottom
         bool in_strip_zone = y >= window_height_ - ThumbnailStrip::kHeight;
         if (in_strip_zone != show_thumbnails_hover_) {
             show_thumbnails_hover_ = in_strip_zone;
@@ -711,6 +995,7 @@ void App::on_motion(int x, int y) {
         if (show_thumbnails_hover_) return;
     }
 
+    // 3. Image drag-to-pan
     if (decoded_image_.width <= 0 || !dragging_) return;
 
     pan_x_ = pan_start_x_ + (float)(x - drag_start_x_);
@@ -721,8 +1006,10 @@ void App::on_motion(int x, int y) {
 void App::on_scroll(const ScrollEvent& ev) {
     // Thumbnail strip horizontal scroll
     bool strip_active = show_thumbnails_ && (!(fullscreen_ || slideshow_) || show_thumbnails_hover_);
+    int strip_h_scroll = (strip_active && decoded_image_.width > 0 && dir_images_.size() > 1)
+                             ? ThumbnailStrip::kHeight : 0;
     if (strip_active && !dir_images_.empty() &&
-        pointer_y_ >= window_height_ - ThumbnailStrip::kHeight) {
+        pointer_y_ >= window_height_ - strip_h_scroll) {
         int entry_w = ThumbnailStrip::kThumbW + ThumbnailStrip::kGap;
         int max_scroll = std::max(0, (int)dir_images_.size() * entry_w + ThumbnailStrip::kMargin - window_width_);
         thumb_scroll_ += ev.discrete_x * entry_w;
@@ -736,6 +1023,254 @@ void App::on_scroll(const ScrollEvent& ev) {
     if (decoded_image_.width <= 0) return;
     if (ev.discrete_y > 0) zoom_out();
     else if (ev.discrete_y < 0) zoom_in();
+}
+
+// --- Coordinate conversion (image ↔ window) ---
+
+void App::img_to_win(int img_x, int img_y, int& win_x, int& win_y) const {
+    if (decoded_image_.width <= 0 || decoded_image_.height <= 0) {
+        win_x = img_x; win_y = img_y;
+        return;
+    }
+    float img_w = (float)decoded_image_.width;
+    float img_h = (float)decoded_image_.height;
+    bool hide_strip = fullscreen_ || slideshow_;
+    bool strip_visible = show_thumbnails_ && (!hide_strip || show_thumbnails_hover_);
+    int strip_h = (strip_visible && decoded_image_.width > 0 && dir_images_.size() > 1)
+                      ? ThumbnailStrip::kHeight : 0;
+    int avail_h = window_height_ - (show_toolbar_ ? Overlay::kToolbarHeight : 0) - strip_h;
+    int content_w = window_width_ - (show_sidebar_ ? 320 : 0);
+    float fit_scale = std::min((float)content_w / img_w, (float)avail_h / img_h) * zoom_;
+    int draw_w = std::max(1, (int)(img_w * fit_scale));
+    int draw_h = std::max(1, (int)(img_h * fit_scale));
+    int offset_x = (content_w - draw_w) / 2 + (int)pan_x_;
+    int offset_y = (show_toolbar_ ? Overlay::kToolbarHeight : 0) + (avail_h - draw_h) / 2 + (int)pan_y_;
+    float sx = (float)draw_w / img_w;
+    float sy = (float)draw_h / img_h;
+    win_x = (int)(img_x * sx) + offset_x;
+    win_y = (int)(img_y * sy) + offset_y;
+}
+
+void App::win_to_img(int win_x, int win_y, int& img_x, int& img_y) const {
+    if (decoded_image_.width <= 0 || decoded_image_.height <= 0) {
+        img_x = win_x; img_y = win_y;
+        return;
+    }
+    float img_w = (float)decoded_image_.width;
+    float img_h = (float)decoded_image_.height;
+    bool hide_strip = fullscreen_ || slideshow_;
+    bool strip_visible = show_thumbnails_ && (!hide_strip || show_thumbnails_hover_);
+    int strip_h = (strip_visible && decoded_image_.width > 0 && dir_images_.size() > 1)
+                      ? ThumbnailStrip::kHeight : 0;
+    int avail_h = window_height_ - (show_toolbar_ ? Overlay::kToolbarHeight : 0) - strip_h;
+    int content_w = window_width_ - (show_sidebar_ ? 320 : 0);
+    float fit_scale = std::min((float)content_w / img_w, (float)avail_h / img_h) * zoom_;
+    int draw_w = std::max(1, (int)(img_w * fit_scale));
+    int draw_h = std::max(1, (int)(img_h * fit_scale));
+    int offset_x = (content_w - draw_w) / 2 + (int)pan_x_;
+    int offset_y = (show_toolbar_ ? Overlay::kToolbarHeight : 0) + (avail_h - draw_h) / 2 + (int)pan_y_;
+    float sx = (float)draw_w / img_w;
+    float sy = (float)draw_h / img_h;
+    img_x = (sx > 0) ? (int)((win_x - offset_x) / sx) : 0;
+    img_y = (sy > 0) ? (int)((win_y - offset_y) / sy) : 0;
+}
+
+// --- Crop rectangle rendering ---
+
+void App::draw_crop_rect(cairo_t* cr, int win_w, int win_h) {
+    (void)win_w;
+    (void)win_h;
+    if (decoded_image_.width <= 0 || decoded_image_.height <= 0) return;
+
+    int wx1, wy1, wx2, wy2;
+    img_to_win(crop_x_, crop_y_, wx1, wy1);
+    img_to_win(crop_x_ + crop_w_, crop_y_ + crop_h_, wx2, wy2);
+
+    int rw = wx2 - wx1;
+    int rh = wy2 - wy1;
+    if (rw < 1 || rh < 1) return;
+
+    // Clear the dim area by drawing a "window" through the dim overlay
+    // using the path difference technique: draw the dim rect, then
+    // subtract the crop rectangle.
+    // Since we draw the dim overlay in render_crop_overlay first and
+    // then draw the crop rect on top, we just draw the crop rect outline.
+
+    // Crop rectangle outline — accent color
+    cairo_set_source_rgba(cr, m3::primary_r, m3::primary_g, m3::primary_b, 0.9);
+    cairo_set_line_width(cr, 2);
+    overlay_.draw_rounded_rect(cr, wx1, wy1, rw, rh, 4);
+    cairo_stroke(cr);
+
+    // Lighter fill for the crop area
+    cairo_set_source_rgba(cr, m3::primary_r, m3::primary_g, m3::primary_b, 0.08);
+    overlay_.draw_rounded_rect(cr, wx1, wy1, rw, rh, 4);
+    cairo_fill(cr);
+
+    // Corner handles
+    int hl = 10;
+    auto draw_handle = [&](int hx, int hy) {
+        cairo_rectangle(cr, hx - hl / 2, hy - hl / 2, hl, hl);
+        cairo_fill(cr);
+    };
+    cairo_set_source_rgba(cr, 1, 1, 1, 0.9);
+    draw_handle(wx1, wy1);
+    draw_handle(wx2, wy1);
+    draw_handle(wx1, wy2);
+    draw_handle(wx2, wy2);
+
+    // Center cross-hair
+    cairo_set_source_rgba(cr, m3::primary_r, m3::primary_g, m3::primary_b, 0.5);
+    cairo_set_line_width(cr, 1);
+    cairo_move_to(cr, wx1 + rw / 2, wy1);
+    cairo_line_to(cr, wx1 + rw / 2, wy2);
+    cairo_stroke(cr);
+    cairo_move_to(cr, wx1, wy1 + rh / 2);
+    cairo_line_to(cr, wx2, wy1 + rh / 2);
+    cairo_stroke(cr);
+
+    // Size label
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%d × %d", crop_w_, crop_h_);
+    cairo_set_source_rgba(cr, 1, 1, 1, 0.9);
+    cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                           CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, 13);
+    cairo_move_to(cr, wx1 + 6, wy1 - 6);
+    cairo_show_text(cr, buf);
+}
+
+// --- Crop methods ---
+
+void App::toggle_crop() {
+    if (crop_active_) {
+        cancel_crop();
+        return;
+    }
+    if (decoded_image_.width <= 0) return;
+    // Initialize crop rectangle to 90% of image, centered
+    crop_x_ = decoded_image_.width / 20;
+    crop_y_ = decoded_image_.height / 20;
+    crop_w_ = decoded_image_.width * 9 / 10;
+    crop_h_ = decoded_image_.height * 9 / 10;
+    crop_active_ = true;
+    render();
+}
+
+void App::apply_crop() {
+    if (!crop_active_ || decoded_image_.width <= 0) return;
+    if (crop_w_ <= 0 || crop_h_ <= 0) { cancel_crop(); return; }
+
+    int x = std::max(0, std::min(crop_x_, decoded_image_.width - 1));
+    int y = std::max(0, std::min(crop_y_, decoded_image_.height - 1));
+    int w = std::min(crop_w_, decoded_image_.width - x);
+    int h = std::min(crop_h_, decoded_image_.height - y);
+    if (w <= 0 || h <= 0) { cancel_crop(); return; }
+
+    // Extract the cropped region from the RGBA data
+    std::vector<uint8_t> cropped((size_t)w * h * 4);
+    int src_stride = decoded_image_.width * 4;
+    for (int row = 0; row < h; row++) {
+        int sy = y + row;
+        memcpy(cropped.data() + (size_t)row * w * 4,
+               decoded_image_.rgba.data() + (size_t)sy * src_stride + (size_t)x * 4,
+               (size_t)w * 4);
+    }
+
+    decoded_image_.rgba = std::move(cropped);
+    decoded_image_.width = w;
+    decoded_image_.height = h;
+    decoded_image_.stride = w * 4;
+
+    // Rebuild BGRA cache
+    size_t npix = (size_t)w * h;
+    bgra_cache_.resize(npix * 4);
+    for (size_t i = 0; i < npix; i++) {
+        bgra_cache_[i * 4 + 0] = decoded_image_.rgba[i * 4 + 2];
+        bgra_cache_[i * 4 + 1] = decoded_image_.rgba[i * 4 + 1];
+        bgra_cache_[i * 4 + 2] = decoded_image_.rgba[i * 4 + 0];
+        bgra_cache_[i * 4 + 3] = decoded_image_.rgba[i * 4 + 3];
+    }
+
+    crop_active_ = false;
+    image_modified_ = true;
+    update_title();
+    render();
+}
+
+void App::cancel_crop() {
+    crop_active_ = false;
+    crop_dragging_ = false;
+    render();
+}
+
+// --- Menu ---
+
+void App::toggle_menu() {
+    show_menu_ = !show_menu_;
+    if (show_menu_) {
+        show_settings_ = false;
+    }
+    render();
+}
+
+// --- Save helpers ---
+
+void App::write_png_file(const std::string& path) {
+    if (decoded_image_.rgba.empty()) return;
+    // decoded_image_ is RGBA. stbi_write_png expects RGB or RGBA.
+    stbi_write_png(path.c_str(),
+                   decoded_image_.width,
+                   decoded_image_.height,
+                   4, // RGBA
+                   decoded_image_.rgba.data(),
+                   decoded_image_.width * 4);
+    std::cout << "Saved: " << path << " ("
+              << decoded_image_.width << "x" << decoded_image_.height << ")\n";
+}
+
+void App::save_image() {
+    if (!image_modified_ || current_path_.empty()) return;
+    write_png_file(current_path_);
+    image_modified_ = false;
+    update_title();
+}
+
+void App::save_as() {
+    save_dialog_(false);
+}
+
+void App::save_as_copy() {
+    save_dialog_(true);
+}
+
+void App::save_dialog_(bool as_copy) {
+    if (decoded_image_.rgba.empty()) return;
+
+    std::string parent_handle = "wayland:wl_surface@";
+    uint32_t surface_id = wl_proxy_get_id((struct wl_proxy*)surface_);
+    parent_handle += std::to_string(surface_id);
+
+    fs::path current(current_path_);
+    std::string suggested = current.empty() ? "image.png" : current.filename().string();
+    std::string folder;
+    if (!current.empty()) {
+        folder = "file://" + current.parent_path().string();
+    }
+
+    portal_dialog_.save_file(parent_handle, suggested, folder,
+        [this, as_copy](const std::string& path) {
+            if (path.empty()) return;
+            write_png_file(path);
+            image_modified_ = false;
+            if (!as_copy) {
+                // Save As — make this the new current file
+                open_file(path);
+            } else {
+                // Save As Copy — keep current file, just refresh
+                render();
+            }
+        });
 }
 
 // --- File dialog ---
@@ -771,7 +1306,7 @@ void App::open_file(const std::string& path) {
     decoded_image_ = DecodedImage{};
     bgra_cache_.clear();
     dragging_ = false;
-    zoom_ = 1.0f;
+    zoom_ = config_.default_zoom;
     pan_x_ = 0.0f;
     pan_y_ = 0.0f;
     update_title();
@@ -1310,6 +1845,10 @@ void App::toggle_overlay() {
 
 void App::toggle_settings() {
     show_settings_ = !show_settings_;
+    if (!show_settings_ && active_slider_) {
+        active_slider_->handlePointerUp(0, 0);
+        active_slider_ = nullptr;
+    }
     render();
 }
 
@@ -1321,6 +1860,32 @@ void App::toggle_sidebar() {
 void App::set_bg_alpha(float a) {
     bg_alpha_ = std::max(0.0f, std::min(1.0f, a));
     config_.bg_alpha = bg_alpha_;
+    Config::save(config_);
+    render();
+}
+
+void App::set_slideshow_interval(int ms) {
+    ms = std::max(1000, std::min(30000, ms));
+    config_.slideshow_interval_ms = ms;
+    Config::save(config_);
+    render();
+}
+
+void App::toggle_color_management() {
+    config_.enable_color_management = !config_.enable_color_management;
+    Config::save(config_);
+    render();
+}
+
+void App::set_default_zoom(float z) {
+    z = std::max(0.5f, std::min(5.0f, z));
+    config_.default_zoom = z;
+    Config::save(config_);
+    render();
+}
+
+void App::toggle_theme() {
+    config_.theme = (config_.theme == "dark") ? "light" : "dark";
     Config::save(config_);
     render();
 }

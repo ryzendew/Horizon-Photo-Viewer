@@ -21,6 +21,10 @@ public:
 
     bool init();
     void open_file(const std::string& parent_window_id, Callback callback);
+    void save_file(const std::string& parent_window_id,
+                   const std::string& suggested_name,
+                   const std::string& suggested_folder,
+                   Callback callback);
     int get_fd() const;
     bool dispatch();
     bool needs_flush() const;

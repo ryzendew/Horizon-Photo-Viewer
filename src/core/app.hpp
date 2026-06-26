@@ -78,7 +78,18 @@ public:
     void toggle_overlay();
     void toggle_settings();
     void toggle_sidebar();
+    void toggle_menu();
+    void toggle_crop();
+    void apply_crop();
+    void cancel_crop();
     void set_bg_alpha(float a);
+    void set_slideshow_interval(int ms);
+    void toggle_color_management();
+    void set_default_zoom(float z);
+    void toggle_theme();
+    void save_image();
+    void save_as();
+    void save_as_copy();
 
     // File dialog
     void open_file_dialog();
@@ -135,6 +146,21 @@ private:
     bool show_settings_ = false;
     float bg_alpha_ = 1.0f;
 
+    // Menu
+    bool show_menu_ = false;
+
+    // Crop state
+    bool crop_active_ = false;
+    int crop_x_ = 0, crop_y_ = 0;
+    int crop_w_ = 0, crop_h_ = 0;
+    bool crop_dragging_ = false;
+    int crop_drag_start_x_ = 0, crop_drag_start_y_ = 0;
+    int crop_drag_orig_x_ = 0, crop_drag_orig_y_ = 0;
+    int crop_drag_orig_w_ = 0, crop_drag_orig_h_ = 0;
+    enum CropHandle { CropNone, CropMove, CropTL, CropTR, CropBL, CropBR };
+    CropHandle crop_drag_handle_ = CropNone;
+    bool image_modified_ = false;
+
     // Sidebar
     bool show_sidebar_ = false;
 
@@ -173,6 +199,10 @@ private:
     float pan_start_x_ = 0.0f;
     float pan_start_y_ = 0.0f;
 
+    // Toolbar button hover / press tracking
+    int toolbar_hover_idx_ = -1;
+    int toolbar_press_idx_ = -1;
+
     // Pointer tracking (for scroll-to-position decisions)
     int pointer_x_ = 0;
     int pointer_y_ = 0;
@@ -182,6 +212,14 @@ private:
     int64_t toolbar_hide_time_ = 0;  // timestamp (ms) when cursor left hover zone; 0 = no pending hide
     std::vector<OverlayButton> toolbar_buttons_;
     Overlay overlay_;
+
+    // M3 widgets for settings popup
+    M3Slider bg_alpha_slider_;
+    M3Slider default_zoom_slider_;
+    M3Slider ss_interval_slider_;
+    M3Toggle theme_toggle_;
+    M3Toggle color_mgmt_toggle_;
+    M3Slider* active_slider_ = nullptr;
 
     // Thumbnail strip
     ThumbnailStrip thumbnail_strip_;
@@ -199,6 +237,11 @@ private:
     void load_thumbnail(int index);
     void process_thumb_batch(int count = 3);
     void queue_thumb_preload(int from, int to);
+    void img_to_win(int img_x, int img_y, int& win_x, int& win_y) const;
+    void win_to_img(int win_x, int win_y, int& img_x, int& img_y) const;
+    void draw_crop_rect(cairo_t* cr, int win_w, int win_h);
+    void write_png_file(const std::string& path);
+    void save_dialog_(bool as_copy);
     void gen_thumb_bgra(const std::vector<uint8_t>& rgba, int w, int h,
                         std::vector<uint8_t>& out, int& out_w, int& out_h);
     void invalidate_thumb_strip();

@@ -37,6 +37,10 @@ install_data('assets/com.horizon.photo-viewer.svg',
   install_dir: get_option('datadir') / 'icons/hicolor/scalable/apps',
 )
 
+install_data('assets/crop.svg',
+  install_dir: get_option('datadir') / 'horizon-photo-viewer',
+)
+
 # Install icon font for toolbar buttons
 icon_font_install_dir = get_option('datadir') / 'horizon-photo-viewer' / 'fonts'
 install_data('assets/fonts/MF/MaterialSymbolsRounded.ttf',

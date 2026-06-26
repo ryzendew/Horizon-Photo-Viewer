@@ -44,6 +44,123 @@ bool PortalFileDialog::init() {
     return true;
 }
 
+void PortalFileDialog::save_file(const std::string& parent_window_id,
+                                  const std::string& suggested_name,
+                                  const std::string& suggested_folder,
+                                  Callback callback) {
+    if (!conn_) {
+        if (callback) callback("");
+        return;
+    }
+
+    pending_callback_ = nullptr;
+    pending_handle_.clear();
+
+    DBusMessage* msg = dbus_message_new_method_call(
+        "org.freedesktop.portal.Desktop",
+        "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.FileChooser",
+        "SaveFile"
+    );
+    if (!msg) return;
+
+    DBusMessageIter iter;
+    dbus_message_iter_init_append(msg, &iter);
+    dbus_message_iter_append_basic(&iter, DBUS_TYPE_STRING, &parent_window_id);
+
+    const char* title = "Save Image";
+    dbus_message_iter_append_basic(&iter, DBUS_TYPE_STRING, &title);
+
+    // Options dict
+    DBusMessageIter dict_iter;
+    dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY, "{sv}", &dict_iter);
+
+    // current_name
+    if (!suggested_name.empty()) {
+        DBusMessageIter entry_iter, variant_iter;
+        dbus_message_iter_open_container(&dict_iter, DBUS_TYPE_DICT_ENTRY, NULL, &entry_iter);
+        const char* key = "current_name";
+        dbus_message_iter_append_basic(&entry_iter, DBUS_TYPE_STRING, &key);
+        dbus_message_iter_open_container(&entry_iter, DBUS_TYPE_VARIANT, "s", &variant_iter);
+        const char* name = suggested_name.c_str();
+        dbus_message_iter_append_basic(&variant_iter, DBUS_TYPE_STRING, &name);
+        dbus_message_iter_close_container(&entry_iter, &variant_iter);
+        dbus_message_iter_close_container(&dict_iter, &entry_iter);
+    }
+
+    // current_folder
+    if (!suggested_folder.empty()) {
+        DBusMessageIter entry_iter, variant_iter;
+        dbus_message_iter_open_container(&dict_iter, DBUS_TYPE_DICT_ENTRY, NULL, &entry_iter);
+        const char* key = "current_folder";
+        dbus_message_iter_append_basic(&entry_iter, DBUS_TYPE_STRING, &key);
+        dbus_message_iter_open_container(&entry_iter, DBUS_TYPE_VARIANT, "s", &variant_iter);
+        const char* folder = suggested_folder.c_str();
+        dbus_message_iter_append_basic(&variant_iter, DBUS_TYPE_STRING, &folder);
+        dbus_message_iter_close_container(&entry_iter, &variant_iter);
+        dbus_message_iter_close_container(&dict_iter, &entry_iter);
+    }
+
+    dbus_message_iter_close_container(&iter, &dict_iter);
+
+    DBusPendingCall* pending = nullptr;
+    if (!dbus_connection_send_with_reply(conn_, msg, &pending, -1)) {
+        dbus_message_unref(msg);
+        return;
+    }
+    dbus_message_unref(msg);
+    if (!pending) return;
+
+    dbus_pending_call_block(pending);
+
+    DBusMessage* reply = dbus_pending_call_steal_reply(pending);
+    dbus_pending_call_unref(pending);
+
+    if (!reply) {
+        if (callback) callback("");
+        return;
+    }
+
+    if (dbus_message_get_type(reply) == DBUS_MESSAGE_TYPE_ERROR) {
+        DBusError err;
+        dbus_error_init(&err);
+        dbus_set_error_from_message(&err, reply);
+        std::cerr << "portal: SaveFile error: " << err.message << "\n";
+        dbus_error_free(&err);
+        dbus_message_unref(reply);
+        if (callback) callback("");
+        return;
+    }
+
+    const char* handle_path = nullptr;
+    DBusMessageIter reply_iter;
+    dbus_message_iter_init(reply, &reply_iter);
+    dbus_message_iter_get_basic(&reply_iter, &handle_path);
+    dbus_message_unref(reply);
+
+    if (!handle_path) {
+        if (callback) callback("");
+        return;
+    }
+
+    pending_handle_ = handle_path;
+    pending_callback_ = std::move(callback);
+    parent_window_id_ = parent_window_id;
+
+    std::cout << "portal: save dialog opened, handle=" << handle_path << "\n";
+
+    std::string match_rule = "interface='org.freedesktop.portal.Request',"
+                             "member='Response',"
+                             "path='" + pending_handle_ + "'";
+    DBusError match_err;
+    dbus_error_init(&match_err);
+    dbus_bus_add_match(conn_, match_rule.c_str(), &match_err);
+    if (dbus_error_is_set(&match_err)) {
+        std::cerr << "portal: add_match error: " << match_err.message << "\n";
+        dbus_error_free(&match_err);
+    }
+}
+
 void PortalFileDialog::open_file(const std::string& parent_window_id, Callback callback) {
     if (!conn_) {
         if (callback) callback("");
