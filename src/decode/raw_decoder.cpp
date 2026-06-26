@@ -29,7 +29,8 @@ bool RawDecoder::can_decode(const uint8_t* data, size_t size) {
     return false;
 }
 
-DecodeResult RawDecoder::decode(const uint8_t* data, size_t size) {
+DecodeResult RawDecoder::decode(const uint8_t* data, size_t size,
+                                 int /*target_width*/, int /*target_height*/) {
     DecodeResult result;
     result.format_name = "RAW";
 

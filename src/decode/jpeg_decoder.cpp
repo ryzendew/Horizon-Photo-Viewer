@@ -10,7 +10,18 @@ bool JpegDecoder::can_decode(const uint8_t* data, size_t size) {
     return data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF;
 }
 
-DecodeResult JpegDecoder::decode(const uint8_t* data, size_t size) {
+static int compute_idct_denom(int img_w, int img_h, int target_w, int target_h) {
+    if (target_w <= 0 || target_h <= 0) return 1;
+    int max_dim = std::max(img_w, img_h);
+    int target_max = std::max(target_w, target_h);
+    if (max_dim > target_max * 8) return 8;
+    if (max_dim > target_max * 4) return 4;
+    if (max_dim > target_max * 2) return 2;
+    return 1;
+}
+
+DecodeResult JpegDecoder::decode(const uint8_t* data, size_t size,
+                                  int target_width, int target_height) {
     DecodeResult result;
     result.format_name = "JPEG";
 
@@ -29,8 +40,18 @@ DecodeResult JpegDecoder::decode(const uint8_t* data, size_t size) {
         free(icc_raw);
     }
 
-    result.width = cinfo.image_width;
-    result.height = cinfo.image_height;
+    // IDCT scaling: compute scale factor based on target vs source dimensions
+    int denom = compute_idct_denom(cinfo.image_width, cinfo.image_height,
+                                    target_width, target_height);
+    if (denom > 1) {
+        cinfo.scale_num = 1;
+        cinfo.scale_denom = denom;
+    }
+
+    jpeg_calc_output_dimensions(&cinfo);
+
+    result.width = cinfo.output_width;
+    result.height = cinfo.output_height;
 
     jpeg_start_decompress(&cinfo);
 

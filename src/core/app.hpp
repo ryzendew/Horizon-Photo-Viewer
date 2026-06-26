@@ -179,6 +179,7 @@ private:
 
     // Toolbar (populated during render for hit-testing)
     bool show_toolbar_ = true;
+    int64_t toolbar_hide_time_ = 0;  // timestamp (ms) when cursor left hover zone; 0 = no pending hide
     std::vector<OverlayButton> toolbar_buttons_;
     Overlay overlay_;
 

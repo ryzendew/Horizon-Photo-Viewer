@@ -21,7 +21,8 @@ bool HeifDecoder::can_decode(const uint8_t* data, size_t size) {
     return is_heif_magic(data, size);
 }
 
-DecodeResult HeifDecoder::decode(const uint8_t* data, size_t size) {
+DecodeResult HeifDecoder::decode(const uint8_t* data, size_t size,
+                                  int /*target_width*/, int /*target_height*/) {
     DecodeResult result;
     result.format_name = "HEIF";
 

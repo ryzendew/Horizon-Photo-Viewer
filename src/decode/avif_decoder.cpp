@@ -17,7 +17,8 @@ bool AvifDecoder::can_decode(const uint8_t* data, size_t size) {
     return false;
 }
 
-DecodeResult AvifDecoder::decode(const uint8_t* data, size_t size) {
+DecodeResult AvifDecoder::decode(const uint8_t* data, size_t size,
+                                  int /*target_width*/, int /*target_height*/) {
     DecodeResult result;
     result.format_name = "AVIF";
 

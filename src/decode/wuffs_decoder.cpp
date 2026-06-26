@@ -92,7 +92,8 @@ bool WuffsDecoder::can_decode(const uint8_t* data, size_t size) {
     return is_png(data, size) || is_gif(data, size) || is_bmp(data, size) || is_tiff(data, size);
 }
 
-DecodeResult WuffsDecoder::decode(const uint8_t* /*data*/, size_t /*size*/) {
+DecodeResult WuffsDecoder::decode(const uint8_t* /*data*/, size_t /*size*/,
+                                   int /*target_width*/, int /*target_height*/) {
     return DecodeResult{};
 }
 
@@ -102,7 +103,8 @@ bool StbDecoder::can_decode(const uint8_t* /*data*/, size_t /*size*/) {
     return true; // We try stb_image last for anything
 }
 
-DecodeResult StbDecoder::decode(const uint8_t* data, size_t size) {
+DecodeResult StbDecoder::decode(const uint8_t* data, size_t size,
+                                 int /*target_width*/, int /*target_height*/) {
     DecodeResult result;
     int w = 0, h = 0, channels = 0;
 
@@ -127,7 +129,8 @@ bool WebPDecoder::can_decode(const uint8_t* data, size_t size) {
     return is_webp(data, size);
 }
 
-DecodeResult WebPDecoder::decode(const uint8_t* /*data*/, size_t /*size*/) {
+DecodeResult WebPDecoder::decode(const uint8_t* /*data*/, size_t /*size*/,
+                                  int /*target_width*/, int /*target_height*/) {
     return DecodeResult{};
 }
 #endif
@@ -139,7 +142,8 @@ bool JpegDecoder::can_decode(const uint8_t* data, size_t size) {
     return is_jpeg(data, size);
 }
 
-DecodeResult JpegDecoder::decode(const uint8_t* /*data*/, size_t /*size*/) {
+DecodeResult JpegDecoder::decode(const uint8_t* /*data*/, size_t /*size*/,
+                                  int /*target_width*/, int /*target_height*/) {
     return DecodeResult{};
 }
 #endif
@@ -151,7 +155,8 @@ bool HeifDecoder::can_decode(const uint8_t* data, size_t size) {
     return is_heif(data, size) && !is_avif(data, size);
 }
 
-DecodeResult HeifDecoder::decode(const uint8_t* /*data*/, size_t /*size*/) {
+DecodeResult HeifDecoder::decode(const uint8_t* /*data*/, size_t /*size*/,
+                                  int /*target_width*/, int /*target_height*/) {
     return DecodeResult{};
 }
 #endif
@@ -163,7 +168,8 @@ bool AvifDecoder::can_decode(const uint8_t* data, size_t size) {
     return is_avif(data, size);
 }
 
-DecodeResult AvifDecoder::decode(const uint8_t* /*data*/, size_t /*size*/) {
+DecodeResult AvifDecoder::decode(const uint8_t* /*data*/, size_t /*size*/,
+                                  int /*target_width*/, int /*target_height*/) {
     return DecodeResult{};
 }
 #endif
@@ -175,7 +181,8 @@ bool RawDecoder::can_decode(const uint8_t* /*data*/, size_t /*size*/) {
     return false; // TODO: detect RAW formats
 }
 
-DecodeResult RawDecoder::decode(const uint8_t* /*data*/, size_t /*size*/) {
+DecodeResult RawDecoder::decode(const uint8_t* /*data*/, size_t /*size*/,
+                                  int /*target_width*/, int /*target_height*/) {
     return DecodeResult{};
 }
 #endif
@@ -187,7 +194,8 @@ bool JxlDecoder::can_decode(const uint8_t* data, size_t size) {
     return is_jxl(data, size);
 }
 
-DecodeResult JxlDecoder::decode(const uint8_t* /*data*/, size_t /*size*/) {
+DecodeResult JxlDecoder::decode(const uint8_t* /*data*/, size_t /*size*/,
+                                  int /*target_width*/, int /*target_height*/) {
     return DecodeResult{};
 }
 #endif

@@ -16,6 +16,7 @@
 
 #include <string>
 #include <vector>
+#include <cstdint>
 #include <memory>
 struct wp_fractional_scale_manager_v1;
 struct wp_tearing_control_manager_v1;
@@ -49,6 +50,7 @@ public:
     wp_fractional_scale_manager_v1* fractional_scale_manager() const { return fractional_scale_mgr_; }
     wp_tearing_control_manager_v1* tearing_control_manager() const { return tearing_control_mgr_; }
     wp_color_manager_v1* color_manager() const { return color_mgr_; }
+    const std::vector<uint8_t>& display_icc_profile() const { return display_icc_profile_; }
     zwp_idle_inhibit_manager_v1* idle_inhibit_manager() const { return idle_inhibit_mgr_; }
     zwp_keyboard_shortcuts_inhibit_manager_v1* keyboard_shortcuts_inhibit_manager() const { return keyboard_shortcuts_inhibit_mgr_; }
     zwp_linux_dmabuf_v1* linux_dmabuf() const { return linux_dmabuf_; }
@@ -56,6 +58,15 @@ public:
     zxdg_output_manager_v1* xdg_output_manager() const { return xdg_output_mgr_; }
 
     wl_data_device_manager* data_device_manager() const { return data_device_mgr_; }
+
+    // Color management callbacks (public for listener struct initialization)
+    static void cm_output_img_desc_ready(void* data, wp_image_description_v1* desc,
+                                          uint32_t identity);
+    static void cm_output_img_desc_failed(void* data, wp_image_description_v1* desc,
+                                           uint32_t cause, const char* msg);
+    static void cm_output_info_icc(void* data, wp_image_description_info_v1* info,
+                                    int32_t icc_fd, uint32_t icc_size);
+    static void cm_output_info_done(void* data, wp_image_description_info_v1* info);
 
 private:
     static void registry_global(void* data, wl_registry* registry, uint32_t name,
@@ -72,6 +83,7 @@ private:
     wl_compositor* compositor_ = nullptr;
     wl_shm* shm_ = nullptr;
     wl_seat* seat_ = nullptr;
+    wl_output* output_ = nullptr;
 
     xdg_wm_base* xdg_base_ = nullptr;
 
@@ -85,6 +97,14 @@ private:
     wp_single_pixel_buffer_manager_v1* single_pixel_buffer_mgr_ = nullptr;
     zxdg_output_manager_v1* xdg_output_mgr_ = nullptr;
     wl_data_device_manager* data_device_mgr_ = nullptr;
+
+    // Color management output state (for display ICC profile retrieval)
+    wp_color_management_output_v1* cm_output_ = nullptr;
+    wp_image_description_v1* cm_img_desc_ = nullptr;
+    std::vector<uint8_t> display_icc_profile_;
+    bool cm_icc_ready_ = false;
+
+    void fetch_display_icc_profile();
 };
 
 }

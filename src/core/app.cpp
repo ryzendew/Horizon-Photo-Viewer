@@ -12,6 +12,7 @@
 
 #include <unistd.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <wayland-client.h>
 #include <xkbcommon/xkbcommon.h>
 
@@ -683,14 +684,22 @@ void App::on_motion(int x, int y) {
     pointer_y_ = y;
 
     if (fullscreen_ || slideshow_) {
-        // Toolbar hover at top
+        // Toolbar hover at top with 2s dismiss delay
         bool in_zone = y < Overlay::kToolbarHoverZone;
-        if (in_zone != show_toolbar_) {
-            show_toolbar_ = in_zone;
-            pending_redraw_ = true;
+        if (in_zone) {
+            if (!show_toolbar_) {
+                show_toolbar_ = true;
+                pending_redraw_ = true;
+            }
+            toolbar_hide_time_ = 0; // cancel pending hide
             return;
         }
-        if (show_toolbar_) return;
+        if (show_toolbar_ && toolbar_hide_time_ == 0) {
+            // Just left hover zone — start timer
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            toolbar_hide_time_ = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+        }
 
         // Thumbnail strip hover at bottom
         bool in_strip_zone = y >= window_height_ - ThumbnailStrip::kHeight;
@@ -915,7 +924,8 @@ void App::load_image(const std::string& path) {
         }
         fclose(f);
 
-        result = decoders_.decode(file_buf.data(), file_buf.size());
+        result = decoders_.decode(file_buf.data(), file_buf.size(),
+                                   window_width_, window_height_);
         if (result.pixels.empty()) {
             std::cerr << "Failed to decode: " << path << "\n";
             return;
@@ -926,7 +936,12 @@ void App::load_image(const std::string& path) {
 
 #ifdef HAVE_LCMS2
     if (!result.icc_profile.empty()) {
-        apply_color_management(result);
+        const auto& disp = conn_.display_icc_profile();
+        if (!disp.empty() && config_.enable_color_management) {
+            apply_color_management(result, disp);
+        } else {
+            apply_color_management(result);
+        }
     }
 #endif
 
@@ -1270,6 +1285,7 @@ void App::toggle_fullscreen() {
     if (!xdg_toplevel_) return;
     fullscreen_ = !fullscreen_;
     show_toolbar_ = !fullscreen_;
+    toolbar_hide_time_ = 0;
     if (fullscreen_) {
         xdg_toplevel_set_fullscreen(xdg_toplevel_, nullptr);
     } else {
@@ -1358,6 +1374,19 @@ int App::run() {
             }
         } else if (ret == 0 && slideshow_) {
             next_image();
+        }
+
+        // Toolbar auto-hide: check if 2s have elapsed since cursor left zone
+        if (toolbar_hide_time_ > 0 && (fullscreen_ || slideshow_)) {
+            struct timespec ts;
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+            int64_t now = (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+            static constexpr int64_t kToolbarHideDelayMs = 2000;
+            if (now - toolbar_hide_time_ >= kToolbarHideDelayMs) {
+                toolbar_hide_time_ = 0;
+                show_toolbar_ = false;
+                pending_redraw_ = true;
+            }
         }
 
         process_thumb_batch();

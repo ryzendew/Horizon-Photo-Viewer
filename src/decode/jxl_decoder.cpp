@@ -15,7 +15,8 @@ bool JxlDecoder::can_decode(const uint8_t* data, size_t size) {
     return is_jxl_magic(data, size);
 }
 
-DecodeResult JxlDecoder::decode(const uint8_t* data, size_t size) {
+DecodeResult JxlDecoder::decode(const uint8_t* data, size_t size,
+                                 int /*target_width*/, int /*target_height*/) {
     DecodeResult result;
     result.format_name = "JPEG-XL";
 

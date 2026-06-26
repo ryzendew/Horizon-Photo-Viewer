@@ -6,17 +6,23 @@
 
 namespace hpv {
 
-static bool apply_icc_to_srgb(std::vector<uint8_t>& pixels, int width, int height,
-                               const std::vector<uint8_t>& icc_profile) {
-    if (pixels.empty() || icc_profile.empty() || width <= 0 || height <= 0) return false;
+static bool apply_icc_transform(std::vector<uint8_t>& pixels, int width, int height,
+                                 const std::vector<uint8_t>& icc_src,
+                                 const std::vector<uint8_t>& icc_dst) {
+    if (pixels.empty() || icc_src.empty() || width <= 0 || height <= 0) return false;
 
-    cmsHPROFILE src = cmsOpenProfileFromMem(icc_profile.data(), (cmsUInt32Number)icc_profile.size());
+    cmsHPROFILE src = cmsOpenProfileFromMem(icc_src.data(), (cmsUInt32Number)icc_src.size());
     if (!src) {
-        std::cerr << "lcms: failed to open ICC profile\n";
+        std::cerr << "lcms: failed to open source ICC profile\n";
         return false;
     }
 
-    cmsHPROFILE dst = cmsCreate_sRGBProfile();
+    cmsHPROFILE dst;
+    if (!icc_dst.empty()) {
+        dst = cmsOpenProfileFromMem(icc_dst.data(), (cmsUInt32Number)icc_dst.size());
+    } else {
+        dst = cmsCreate_sRGBProfile();
+    }
     if (!dst) {
         cmsCloseProfile(src);
         return false;
@@ -46,7 +52,14 @@ static bool apply_icc_to_srgb(std::vector<uint8_t>& pixels, int width, int heigh
 
 void apply_color_management(DecodeResult& result) {
     if (result.icc_profile.empty()) return;
-    apply_icc_to_srgb(result.pixels, result.width, result.height, result.icc_profile);
+    apply_icc_transform(result.pixels, result.width, result.height,
+                         result.icc_profile, {});
+}
+
+void apply_color_management(DecodeResult& result, const std::vector<uint8_t>& display_profile) {
+    if (result.icc_profile.empty()) return;
+    apply_icc_transform(result.pixels, result.width, result.height,
+                         result.icc_profile, display_profile);
 }
 
 }
