@@ -8,7 +8,10 @@ void Overlay::render_menu_popup(cairo_t* cr, int win_w, int win_h,
     (void)win_h;
     (void)state;
     int pw = 200;
-    int ph = 160;
+    int item_h = 44;
+    const char* items[] = { "Save", "Save As", "Save As Copy", "Upload\u2026" };
+    int num_items = sizeof(items) / sizeof(items[0]);
+    int ph = 8 + num_items * item_h;
     int px = win_w - pw - 8;
     int py = Overlay::kToolbarHeight + 4;
 
@@ -26,9 +29,7 @@ void Overlay::render_menu_popup(cairo_t* cr, int win_w, int win_h,
     cairo_stroke(cr);
 
     // Menu items
-    int item_h = 44;
-    const char* items[] = { "Save", "Save As", "Save As Copy" };
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < num_items; i++) {
         int iy = py + 4 + i * item_h;
         // Hover highlight
         // (hover state passed through the button vector is checked at App level)
@@ -41,7 +42,7 @@ void Overlay::render_menu_popup(cairo_t* cr, int win_w, int win_h,
         cairo_show_text(cr, items[i]);
 
         buttons.push_back({
-            px + 8, iy, pw - 16, item_h, std::string(items[i]), {}
+            px + 8, iy, pw - 16, item_h, std::string(items[i]), {}, {}
         });
     }
 }

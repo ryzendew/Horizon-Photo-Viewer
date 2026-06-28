@@ -45,6 +45,30 @@ install_data('assets/flip.svg',
   install_dir: get_option('datadir') / 'horizon-photo-viewer',
 )
 
+# Screenshot toolbar SVG icons
+install_data('assets/screen.svg',
+  install_dir: get_option('datadir') / 'horizon-photo-viewer',
+)
+install_data('assets/window.svg',
+  install_dir: get_option('datadir') / 'horizon-photo-viewer',
+)
+install_data('assets/focused.svg',
+  install_dir: get_option('datadir') / 'horizon-photo-viewer',
+)
+install_data('assets/selection.svg',
+  install_dir: get_option('datadir') / 'horizon-photo-viewer',
+)
+install_data('assets/copy.svg',
+  install_dir: get_option('datadir') / 'horizon-photo-viewer',
+)
+install_data('assets/panel.svg',
+  install_dir: get_option('datadir') / 'horizon-photo-viewer',
+)
+
+install_data('assets/upload.svg',
+  install_dir: get_option('datadir') / 'horizon-photo-viewer',
+)
+
 # Install icon font for toolbar buttons
 icon_font_install_dir = get_option('datadir') / 'horizon-photo-viewer' / 'fonts'
 install_data('assets/fonts/MF/MaterialSymbolsRounded.ttf',

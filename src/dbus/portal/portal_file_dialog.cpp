@@ -161,7 +161,8 @@ void PortalFileDialog::save_file(const std::string& parent_window_id,
     }
 }
 
-void PortalFileDialog::open_file(const std::string& parent_window_id, Callback callback) {
+void PortalFileDialog::open_file(const std::string& parent_window_id, Callback callback,
+                                  const std::vector<std::string>& mime_types) {
     if (!conn_) {
         if (callback) callback("");
         return;
@@ -189,9 +190,44 @@ void PortalFileDialog::open_file(const std::string& parent_window_id, Callback c
     const char* title = "Open Image";
     dbus_message_iter_append_basic(&iter, DBUS_TYPE_STRING, &title);
 
-    // Options dict (empty for now)
+    // Options dict
     DBusMessageIter dict_iter;
     dbus_message_iter_open_container(&iter, DBUS_TYPE_ARRAY, "{sv}", &dict_iter);
+
+    // filters — a(sa(us)): each filter is (display_name, [(type, pattern)...])
+    if (!mime_types.empty()) {
+        DBusMessageIter entry_iter, variant_iter, filter_array_iter;
+        dbus_message_iter_open_container(&dict_iter, DBUS_TYPE_DICT_ENTRY, NULL, &entry_iter);
+        const char* key = "filters";
+        dbus_message_iter_append_basic(&entry_iter, DBUS_TYPE_STRING, &key);
+
+        dbus_message_iter_open_container(&entry_iter, DBUS_TYPE_VARIANT, "a(sa(us))", &variant_iter);
+        dbus_message_iter_open_container(&variant_iter, DBUS_TYPE_ARRAY, "(sa(us))", &filter_array_iter);
+
+        // Single filter group: "Images"
+        DBusMessageIter group_struct_iter, filter_list_iter, filter_entry_iter;
+        dbus_message_iter_open_container(&filter_array_iter, DBUS_TYPE_STRUCT, NULL, &group_struct_iter);
+        const char* filter_name = "Images";
+        dbus_message_iter_append_basic(&group_struct_iter, DBUS_TYPE_STRING, &filter_name);
+
+        // Array of (uint32 type, string pattern) — type 1 = MIME type
+        dbus_message_iter_open_container(&group_struct_iter, DBUS_TYPE_ARRAY, "(us)", &filter_list_iter);
+        for (const auto& mt : mime_types) {
+            dbus_message_iter_open_container(&filter_list_iter, DBUS_TYPE_STRUCT, NULL, &filter_entry_iter);
+            uint32_t mime_type_tag = 1;
+            dbus_message_iter_append_basic(&filter_entry_iter, DBUS_TYPE_UINT32, &mime_type_tag);
+            const char* mime = mt.c_str();
+            dbus_message_iter_append_basic(&filter_entry_iter, DBUS_TYPE_STRING, &mime);
+            dbus_message_iter_close_container(&filter_list_iter, &filter_entry_iter);
+        }
+        dbus_message_iter_close_container(&group_struct_iter, &filter_list_iter);
+
+        dbus_message_iter_close_container(&filter_array_iter, &group_struct_iter);
+        dbus_message_iter_close_container(&variant_iter, &filter_array_iter);
+        dbus_message_iter_close_container(&entry_iter, &variant_iter);
+        dbus_message_iter_close_container(&dict_iter, &entry_iter);
+    }
+
     dbus_message_iter_close_container(&iter, &dict_iter);
 
     // Send the method call

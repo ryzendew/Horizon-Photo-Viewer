@@ -56,7 +56,7 @@ void Overlay::render_settings_popup(cairo_t* cr, int win_w, int win_h,
     cairo_move_to(cr, xb_cx + cm, xb_cy - cm);
     cairo_line_to(cr, xb_cx - cm, xb_cy + cm);
     cairo_stroke(cr);
-    buttons.push_back({xb_x, xb_y, xb_sz, xb_sz, "CloseSettings", {}});
+    buttons.push_back({xb_x, xb_y, xb_sz, xb_sz, "CloseSettings", {}, {}});
 
     // Divider under title
     int div_y = py + 40;
@@ -286,7 +286,7 @@ void Overlay::render_settings_popup(cairo_t* cr, int win_w, int win_h,
     cairo_set_font_size(cr, 13);
     cairo_move_to(cr, cx + 32, cy + 24);
     cairo_show_text(cr, "Close");
-    buttons.push_back({cx, cy, cw, ch, "CloseSettings", {}});
+    buttons.push_back({cx, cy, cw, ch, "CloseSettings", {}, {}});
 }
 
 } // namespace hpv

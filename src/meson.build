@@ -95,6 +95,25 @@ if jxl.found()
   add_project_arguments('-DHAVE_LIBJXL=1', language: 'cpp')
 endif
 
+# Screenshot support - optional libraries
+libpng = dependency('libpng', required: get_option('libpng'))
+if libpng.found()
+  add_project_arguments('-DEH_HAVE_LIBPNG', language: 'cpp')
+  deps += libpng
+endif
+
+libjxl_sc = dependency('libjxl', required: get_option('libjxl_sc'), version: '>=0.7')
+if libjxl_sc.found()
+  add_project_arguments('-DEH_HAVE_LIBJXL', language: 'cpp')
+  deps += libjxl_sc
+endif
+
+libdrm = dependency('libdrm', required: get_option('libdrm'))
+if libdrm.found()
+  add_project_arguments('-DEH_HAVE_LIBDRM', language: 'cpp')
+  deps += libdrm
+endif
+
 metadata = dependency('exiv2', required: get_option('metadata'))
 if metadata.found()
   sources += files('decode/common/exif.cpp')
@@ -115,6 +134,34 @@ if librsvg.found()
   add_project_arguments('-DHAVE_LIBRSVG=1', language: 'cpp')
 endif
 
+curl = dependency('libcurl', required: get_option('curl'))
+if curl.found()
+  sources += files('features/upload/upload.cpp')
+  deps += curl
+  add_project_arguments('-DHAVE_LIBCURL=1', language: 'cpp')
+endif
+
+# Screenshot source files
+sources += files(
+  'core/screenshot/logging.cpp',
+  'core/screenshot/memfd.cpp',
+  'core/screenshot/color_info.cpp',
+  'core/screenshot/clipboard.cpp',
+  'core/screenshot/foreign_toplevels.cpp',
+  'core/screenshot/wlr_foreign_toplevels.cpp',
+  'core/screenshot/icon_cache.cpp',
+  'screenshot/shm_buffer.cpp',
+  'screenshot/wayland_seat.cpp',
+  'screenshot/screencopy.cpp',
+  'screenshot/app.cpp',
+  'screenshot/capture/capture.cpp',
+  'screenshot/capture/drm_kms.cpp',
+  'screenshot/ui/layout.cpp',
+  'screenshot/ui/button/button.cpp',
+  'screenshot/ui/paint.cpp',
+  'screenshot/ui/input.cpp',
+)
+
 icon_font_system = get_option('prefix') / get_option('datadir') / 'horizon-photo-viewer' / 'fonts' / 'MaterialSymbolsRounded.ttf'
 add_project_arguments('-DICON_FONT_PATH_SYSTEM="' + icon_font_system + '"', language: 'cpp')
 
@@ -123,6 +170,21 @@ add_project_arguments('-DCROP_SVG_PATH_SYSTEM="' + crop_svg_system + '"', langua
 
 flip_svg_system = get_option('prefix') / get_option('datadir') / 'horizon-photo-viewer' / 'flip.svg'
 add_project_arguments('-DFLIP_SVG_PATH_SYSTEM="' + flip_svg_system + '"', language: 'cpp')
+
+# Screenshot toolbar SVG system paths
+screen_svg_system = get_option('prefix') / get_option('datadir') / 'horizon-photo-viewer' / 'screen.svg'
+add_project_arguments('-DSCREEN_SVG_PATH_SYSTEM="' + screen_svg_system + '"', language: 'cpp')
+window_svg_system = get_option('prefix') / get_option('datadir') / 'horizon-photo-viewer' / 'window.svg'
+add_project_arguments('-DWINDOW_SVG_PATH_SYSTEM="' + window_svg_system + '"', language: 'cpp')
+focused_svg_system = get_option('prefix') / get_option('datadir') / 'horizon-photo-viewer' / 'focused.svg'
+add_project_arguments('-DFOCUSED_SVG_PATH_SYSTEM="' + focused_svg_system + '"', language: 'cpp')
+selection_svg_system = get_option('prefix') / get_option('datadir') / 'horizon-photo-viewer' / 'selection.svg'
+add_project_arguments('-DSELECTION_SVG_PATH_SYSTEM="' + selection_svg_system + '"', language: 'cpp')
+copy_svg_system = get_option('prefix') / get_option('datadir') / 'horizon-photo-viewer' / 'copy.svg'
+add_project_arguments('-DCOPY_SVG_PATH_SYSTEM="' + copy_svg_system + '"', language: 'cpp')
+
+upload_svg_system = get_option('prefix') / get_option('datadir') / 'horizon-photo-viewer' / 'upload.svg'
+add_project_arguments('-DUPLOAD_SVG_PATH_SYSTEM="' + upload_svg_system + '"', language: 'cpp')
 
 executable('horizon-photo-viewer',
   sources,

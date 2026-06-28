@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 typedef struct DBusConnection DBusConnection;
 typedef struct DBusWatch DBusWatch;
@@ -20,7 +21,8 @@ public:
     PortalFileDialog& operator=(const PortalFileDialog&) = delete;
 
     bool init();
-    void open_file(const std::string& parent_window_id, Callback callback);
+    void open_file(const std::string& parent_window_id, Callback callback,
+                   const std::vector<std::string>& mime_types = {});
     void save_file(const std::string& parent_window_id,
                    const std::string& suggested_name,
                    const std::string& suggested_folder,

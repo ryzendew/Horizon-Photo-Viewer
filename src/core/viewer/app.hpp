@@ -14,9 +14,16 @@
 #include "decode/core/decoder.hpp"
 #include "ui/overlay.hpp"
 #include "ui/thumbnail_strip/thumbnail_strip.hpp"
+#include "screenshot/app.hpp"
+#include "core/screenshot/foreign_toplevels.hpp"
+#include "core/screenshot/wlr_foreign_toplevels.hpp"
+#include "core/screenshot/icon_cache.hpp"
 
 #include <cairo.h>
 #include <functional>
+#include <atomic>
+#include <mutex>
+#include <thread>
 #include <list>
 #include <memory>
 #include <string>
@@ -127,6 +134,17 @@ public:
     void save_as();
     void save_as_copy();
 
+    // Upload
+    void upload_image();
+
+    // Screenshot
+    void screenshot_screen();
+    void screenshot_window();
+    void screenshot_focused();
+    void screenshot_selection();
+    void screenshot_copy();
+    void toggle_screenshot_panel();
+
     // File dialog
     void open_file_dialog();
     void on_file_dialog_result(const std::string& path);
@@ -184,6 +202,29 @@ private:
 
     // Menu
     bool show_menu_ = false;
+
+    // Window capture dropdown
+    bool show_window_menu_ = false;
+    int window_menu_hover_ = -1;
+    int window_menu_x_ = 0, window_menu_y_ = 0;
+    int window_menu_w_ = 0, window_menu_h_ = 0;
+
+    // Screen capture dropdown
+    bool show_screen_menu_ = false;
+    int screen_menu_hover_ = -1;
+    int screen_menu_x_ = 0, screen_menu_y_ = 0;
+    int screen_menu_w_ = 0, screen_menu_h_ = 0;
+
+    // Upload submenu
+    bool show_upload_menu_ = false;
+    int upload_menu_hover_ = -1;
+    int upload_menu_x_ = 0, upload_menu_y_ = 0;
+    int upload_menu_w_ = 0, upload_menu_h_ = 0;
+
+    // Upload setup dialog
+    bool show_upload_setup_ = false;
+    std::string upload_setup_input_;
+    int upload_setup_hover_btn_ = -1; // -1 = none, 0 = cancel, 1 = save
 
     // Crop state
     bool crop_active_ = false;
@@ -281,6 +322,52 @@ private:
     int64_t toolbar_hide_time_ = 0;  // timestamp (ms) when cursor left hover zone; 0 = no pending hide
     std::vector<OverlayButton> toolbar_buttons_;
     Overlay overlay_;
+
+    // Screenshot panel state
+    bool screenshot_panel_active_ = false;
+    hpv::sc::Source screenshot_source_ = hpv::sc::Source::Screen;
+    int screenshot_sel_output_ = -1;
+    int screenshot_sel_window_ = -1;
+    bool screenshot_capture_all_ = false;
+    std::vector<hpv::sc::OutputInfo> screenshot_outputs_;
+    std::vector<hpv::sc::WindowEntry> screenshot_windows_;
+    bool screenshot_toplevel_avail_ = false;
+    hpv::sc::CapturedImage screenshot_captured_;
+    cairo_surface_t* screenshot_preview_ = nullptr;
+    double screenshot_zoom_ = 1.0;
+    double screenshot_pan_x_ = 0.0;
+    double screenshot_pan_y_ = 0.0;
+    bool screenshot_dragging_ = false;
+    int screenshot_drag_start_x_ = 0;
+    int screenshot_drag_start_y_ = 0;
+    double screenshot_drag_pan_x_ = 0.0;
+    double screenshot_drag_pan_y_ = 0.0;
+    int screenshot_hovered_item_ = -1;
+    int screenshot_hovered_area_ = 0;
+    int screenshot_pressed_item_ = -1;
+    int screenshot_pressed_area_ = 0;
+    std::string screenshot_status_;
+    std::string screenshot_last_path_;
+    int screenshot_panel_x_ = 0, screenshot_panel_y_ = 0;
+    int screenshot_panel_w_ = 0, screenshot_panel_h_ = 0;
+
+    std::atomic<bool> screenshot_capture_pending_ = false;
+    std::atomic<bool> screenshot_open_pending_ = false;
+    std::string screenshot_open_path_;
+    std::mutex screenshot_captured_mutex_;
+    hpv::sc::ClipboardService screenshot_clipboard_;
+    bool screenshot_clipboard_inited_ = false;
+    hpv::sc::IconCache screenshot_icon_cache_;
+    bool screenshot_icon_cache_inited_ = false;
+
+    std::string render_current_image_to_png();
+    void ensure_screenshot_clipboard();
+    void refresh_screenshot_lists();
+    void screenshot_trigger_capture();
+    void screenshot_render_panel(cairo_t* cr, int win_w, int win_h);
+    bool screenshot_handle_click(int x, int y);
+    bool screenshot_handle_motion(int x, int y);
+    void screenshot_open_result(const std::string& path);
 
     // M3 widgets for settings popup
     M3Slider bg_alpha_slider_;

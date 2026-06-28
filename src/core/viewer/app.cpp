@@ -1,6 +1,11 @@
 #include "core/viewer/app.hpp"
 #include "common/math/math.hpp"
 #include "decode/common/svg_doc.hpp"
+#include "screenshot/app.hpp"
+#include "core/screenshot/logging.hpp"
+#ifdef HAVE_LIBCURL
+#include "features/upload/upload.hpp"
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -111,6 +116,87 @@ bool App::init() {
         }
         if (!icons_loaded)
             std::cerr << "overlay: icons (font + svg) not found\n";
+
+        // Load screenshot SVG icons
+        {
+            const char* svg_paths[] = { "assets/screen.svg", "assets/window.svg",
+                                        "assets/focused.svg", "assets/selection.svg",
+                                        "assets/copy.svg" };
+            const char* alt_paths[] = { "../assets/screen.svg", "../assets/window.svg",
+                                        "../assets/focused.svg", "../assets/selection.svg",
+                                        "../assets/copy.svg" };
+    #ifdef SCREEN_SVG_PATH_SYSTEM
+            const char* sys_paths[] = { SCREEN_SVG_PATH_SYSTEM, WINDOW_SVG_PATH_SYSTEM,
+                                        FOCUSED_SVG_PATH_SYSTEM, SELECTION_SVG_PATH_SYSTEM,
+                                        COPY_SVG_PATH_SYSTEM };
+    #endif
+            bool svg_ok = false;
+            for (auto* base : { svg_paths, alt_paths
+    #ifdef SCREEN_SVG_PATH_SYSTEM
+                    , sys_paths
+    #endif
+                }) {
+                if (overlay_.init_screenshot_icons(base[0], base[1], base[2], base[3], base[4])) {
+                    svg_ok = true;
+                    break;
+                }
+            }
+            if (!svg_ok)
+                std::cerr << "overlay: screenshot SVG icons not found\n";
+        }
+
+        // Load panel SVG icon
+        {
+            const char* panel_paths[] = { "assets/panel.svg", "../assets/panel.svg" };
+    #ifdef COPY_SVG_PATH_SYSTEM
+            // Derive panel path from system copy SVG path
+            std::string panel_sys;
+            {
+                std::string cp = COPY_SVG_PATH_SYSTEM;
+                auto pos = cp.rfind('/');
+                if (pos != std::string::npos) {
+                    panel_sys = cp.substr(0, pos + 1) + "panel.svg";
+                }
+            }
+            const char* panel_sys_path = panel_sys.empty() ? nullptr : panel_sys.c_str();
+    #endif
+            bool panel_ok = false;
+            for (const char* p : panel_paths) {
+                if (overlay_.init_panel_icon(p)) {
+                    panel_ok = true;
+                    break;
+                }
+            }
+    #ifdef COPY_SVG_PATH_SYSTEM
+            if (!panel_ok && panel_sys_path) {
+                panel_ok = overlay_.init_panel_icon(panel_sys_path);
+            }
+    #endif
+            if (!panel_ok)
+                std::cerr << "overlay: panel SVG icon not found\n";
+        }
+
+        // Load upload SVG icon
+        {
+            const char* upload_paths[] = { "assets/upload.svg", "../assets/upload.svg" };
+    #ifdef UPLOAD_SVG_PATH_SYSTEM
+            const char* upload_sys_path = UPLOAD_SVG_PATH_SYSTEM;
+    #endif
+            bool upload_ok = false;
+            for (const char* p : upload_paths) {
+                if (overlay_.init_upload_icon(p)) {
+                    upload_ok = true;
+                    break;
+                }
+            }
+    #ifdef UPLOAD_SVG_PATH_SYSTEM
+            if (!upload_ok && upload_sys_path) {
+                upload_ok = overlay_.init_upload_icon(upload_sys_path);
+            }
+    #endif
+            if (!upload_ok)
+                std::cerr << "overlay: upload SVG icon not found\n";
+        }
     }
 
     // Register decoders up front so that if set_window_size triggers a
@@ -482,25 +568,64 @@ void App::present() {
                                 toolbar_hover_idx_, toolbar_press_idx_, bg_alpha_);
         // Fill in button actions after render_toolbar populates geometries
         for (auto& btn : toolbar_buttons_) {
-            if (btn.label == "Open") btn.action = [this]() { open_file_dialog(); };
-            else if (btn.label == "<") btn.action = [this]() { prev_image(); };
-            else if (btn.label == ">") btn.action = [this]() { next_image(); };
-            else if (btn.label == "+") btn.action = [this]() { zoom_in(); };
-            else if (btn.label == "-") btn.action = [this]() { zoom_out(); };
-            else if (btn.label == "Fit") btn.action = [this]() { zoom_fit(); };
-            else if (btn.label == "Full") btn.action = [this]() { toggle_fullscreen(); };
-            else if (btn.label == "Play") btn.action = [this]() { toggle_slideshow(); };
-            else if (btn.label == "Gear") btn.action = [this]() { toggle_settings(); };
-            else if (btn.label == "Info") btn.action = [this]() {
-                show_sidebar_ = !show_sidebar_;
+            if (btn.label == "Open") { btn.action = [this]() { open_file_dialog(); }; btn.tooltip = "Open file"; }
+            else if (btn.label == "<") { btn.action = [this]() { prev_image(); }; btn.tooltip = "Previous image"; }
+            else if (btn.label == ">") { btn.action = [this]() { next_image(); }; btn.tooltip = "Next image"; }
+            else if (btn.label == "+") { btn.action = [this]() { zoom_in(); }; btn.tooltip = "Zoom in"; }
+            else if (btn.label == "-") { btn.action = [this]() { zoom_out(); }; btn.tooltip = "Zoom out"; }
+            else if (btn.label == "Fit") { btn.action = [this]() { zoom_fit(); }; btn.tooltip = "Fit to window"; }
+            else if (btn.label == "Full") { btn.action = [this]() { toggle_fullscreen(); }; btn.tooltip = "Toggle fullscreen"; }
+            else if (btn.label == "Play") { btn.action = [this]() { toggle_slideshow(); }; btn.tooltip = "Start slideshow"; }
+            else if (btn.label == "Gear") { btn.action = [this]() { toggle_settings(); }; btn.tooltip = "Settings"; }
+            else if (btn.label == "Info") {
+                btn.action = [this]() { show_sidebar_ = !show_sidebar_; render(); };
+                btn.tooltip = "Toggle sidebar";
+            }
+            else if (btn.label == "Crop") { btn.action = [this]() { toggle_crop(); }; btn.tooltip = "Crop image"; }
+            else if (btn.label == "Draw") { btn.action = [this]() { toggle_markup(); }; btn.tooltip = "Draw on image"; }
+            else if (btn.label == "RotR") { btn.action = [this]() { rotate_90_cw(); }; btn.tooltip = "Rotate 90\u00B0 CW"; }
+            else if (btn.label == "RotL") { btn.action = [this]() { rotate_90_ccw(); }; btn.tooltip = "Rotate 90\u00B0 CCW"; }
+            else if (btn.label == "Flip") { btn.action = [this]() { flip_horizontal(); }; btn.tooltip = "Flip horizontally"; }
+            else if (btn.label == "Menu") { btn.action = [this]() { toggle_menu(); }; btn.tooltip = "Menu"; }
+            else if (btn.label == "Panel") { btn.action = [this]() { toggle_screenshot_panel(); }; btn.tooltip = "Screenshot panel"; }
+            else if (btn.label == "Screen") { btn.action = [this]() {
+                show_screen_menu_ = !show_screen_menu_;
+                show_window_menu_ = false;
+                show_upload_menu_ = false;
+                if (show_screen_menu_) {
+                    show_menu_ = false;
+                    screenshot_panel_active_ = false;
+                    refresh_screenshot_lists();
+                }
                 render();
-            };
-            else if (btn.label == "Crop") btn.action = [this]() { toggle_crop(); };
-            else if (btn.label == "Draw") btn.action = [this]() { toggle_markup(); };
-            else if (btn.label == "RotR") btn.action = [this]() { rotate_90_cw(); };
-            else if (btn.label == "RotL") btn.action = [this]() { rotate_90_ccw(); };
-            else if (btn.label == "Flip") btn.action = [this]() { flip_horizontal(); };
-            else if (btn.label == "Menu") btn.action = [this]() { toggle_menu(); };
+            }; btn.tooltip = "Capture screens"; }
+            else if (btn.label == "Window") { btn.action = [this]() {
+                show_window_menu_ = !show_window_menu_;
+                show_screen_menu_ = false;
+                show_upload_menu_ = false;
+                if (show_window_menu_) {
+                    show_menu_ = false;
+                    screenshot_panel_active_ = false;
+                    refresh_screenshot_lists();
+                    if (!screenshot_icon_cache_inited_) {
+                        screenshot_icon_cache_.set_icon_theme(hpv::sc::detect_system_icon_theme());
+                        screenshot_icon_cache_inited_ = true;
+                    }
+                }
+                render();
+            }; btn.tooltip = "Capture a window"; }
+            else if (btn.label == "Focused") { btn.action = [this]() { screenshot_focused(); }; btn.tooltip = "Capture focused window"; }
+            else if (btn.label == "Selection") { btn.action = [this]() { screenshot_selection(); }; btn.tooltip = "Capture a selection"; }
+            else if (btn.label == "Copy") { btn.action = [this]() { screenshot_copy(); }; btn.tooltip = "Copy screenshot to clipboard"; }
+            else if (btn.label == "Upload") { btn.action = [this]() {
+                show_upload_menu_ = !show_upload_menu_;
+                show_screen_menu_ = false;
+                show_window_menu_ = false;
+                if (show_upload_menu_) {
+                    show_menu_ = false;
+                }
+                render();
+            }; btn.tooltip = "Upload image"; }
         }
     }
 
@@ -521,9 +646,245 @@ void App::present() {
                 show_menu_ = false;
                 save_as_copy();
             };
+            else if (btn.label == "Upload\u2026") btn.action = [this]() {
+                show_menu_ = false;
+                upload_image();
+            };
         }
         toolbar_buttons_.insert(toolbar_buttons_.end(),
                                 menu_buttons.begin(), menu_buttons.end());
+    }
+
+    // --- Window capture dropdown ---
+    if (show_window_menu_) {
+        int btn_x = 0;
+        for (auto& btn : toolbar_buttons_) {
+            if (btn.label == "Window") { btn_x = btn.x; break; }
+        }
+        int item_h = 36;
+        int max_items = std::min((int)screenshot_windows_.size(), 10);
+        int icon_size = 20;
+        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 13);
+
+        // Compute dynamic width: find the longest label
+        int max_label_w = 0;
+        for (int i = 0; i < max_items; i++) {
+            auto& we = screenshot_windows_[i];
+            const char* label = we.title.empty() ? we.appId.c_str() : we.title.c_str();
+            cairo_text_extents_t te;
+            cairo_text_extents(cr, label, &te);
+            if (te.width > max_label_w) max_label_w = (int)te.width;
+        }
+        int pw = std::clamp(12 + icon_size + 8 + max_label_w + 12, 200, 400);
+        int ph = max_items > 0 ? 4 + max_items * item_h + 4 : 40;
+        int px = std::min(btn_x, win_w - pw - 8);
+        int py = Overlay::kToolbarHeight + 4;
+        int text_max_w = pw - 12 - icon_size - 8 - 12;
+
+        window_menu_x_ = px; window_menu_y_ = py;
+        window_menu_w_ = pw; window_menu_h_ = ph;
+
+        cairo_set_source_rgba(cr, m3::surface_container_high_r, m3::surface_container_high_g,
+                              m3::surface_container_high_b, 0.95);
+        overlay_.draw_rounded_rect(cr, px, py, pw, ph, 10);
+        cairo_fill(cr);
+        cairo_set_source_rgba(cr, m3::outline_variant_r, m3::outline_variant_g,
+                              m3::outline_variant_b, 0.6);
+        cairo_set_line_width(cr, 1);
+        overlay_.draw_rounded_rect(cr, px, py, pw, ph, 10);
+        cairo_stroke(cr);
+
+        if (max_items > 0) {
+            for (int i = 0; i < max_items; i++) {
+                int iy = py + 4 + i * item_h;
+                auto& we = screenshot_windows_[i];
+
+                if (i == window_menu_hover_) {
+                    cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                          m3::on_surface_variant_b, 0.08);
+                    cairo_rectangle(cr, px + 4, iy, pw - 8, item_h);
+                    cairo_fill(cr);
+                }
+
+                int icon_x = px + 12;
+                int icon_y = iy + (item_h - icon_size) / 2;
+                const auto* icon = screenshot_icon_cache_.app_icon(we.appId);
+                if (icon && icon->surface) {
+                    cairo_save(cr);
+                    double scale = (double)icon_size / icon->width;
+                    cairo_translate(cr, icon_x, icon_y);
+                    cairo_scale(cr, scale, scale);
+                    cairo_set_source_surface(cr, icon->surface, 0, 0);
+                    cairo_paint(cr);
+                    cairo_restore(cr);
+                }
+
+                cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g, m3::on_surface_b, 0.87);
+                const char* label = we.title.empty() ? we.appId.c_str() : we.title.c_str();
+                // Truncate with ellipsis if too long
+                std::string display;
+                cairo_text_extents_t te;
+                cairo_text_extents(cr, label, &te);
+                if (te.width > text_max_w) {
+                    display = label;
+                    while (!display.empty()) {
+                        cairo_text_extents(cr, (display + "\u2026").c_str(), &te);
+                        if (te.width <= text_max_w) break;
+                        display.pop_back();
+                    }
+                    display += "\u2026";
+                } else {
+                    display = label;
+                }
+                cairo_move_to(cr, px + 12 + icon_size + 8, iy + item_h / 2 + 5);
+                cairo_show_text(cr, display.c_str());
+            }
+        } else {
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g, m3::on_surface_b, 0.5);
+            cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+            cairo_set_font_size(cr, 12);
+            const char* msg = screenshot_toplevel_avail_ ? "No windows found" : "Window list not available";
+            cairo_text_extents_t te;
+            cairo_text_extents(cr, msg, &te);
+            cairo_move_to(cr, px + (pw - te.width) / 2, py + 26);
+            cairo_show_text(cr, msg);
+        }
+    }
+
+    // --- Screen capture dropdown ---
+    if (show_screen_menu_) {
+        int btn_x = 0;
+        for (auto& btn : toolbar_buttons_) {
+            if (btn.label == "Screen") { btn_x = btn.x; break; }
+        }
+        int item_h = 36;
+        int num_outputs = (int)screenshot_outputs_.size();
+        int num_items = num_outputs > 0 ? num_outputs + 1 : 1; // +1 for "All Screens"
+        int max_items = std::min(num_items, 10);
+        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 13);
+
+        int max_label_w = 0;
+        for (int i = 0; i < max_items; i++) {
+            const char* label;
+            if (i == 0) {
+                label = "All Screens";
+            } else {
+                auto& out = screenshot_outputs_[i - 1];
+                char buf[128];
+                snprintf(buf, sizeof(buf), "%s  %dx%d", out.name.c_str(), out.width, out.height);
+                label = buf;
+            }
+            cairo_text_extents_t te;
+            cairo_text_extents(cr, label, &te);
+            if (te.width > max_label_w) max_label_w = (int)te.width;
+        }
+        int pw = std::clamp(12 + max_label_w + 12, 200, 400);
+        int ph = 4 + max_items * item_h + 4;
+        int px = std::min(btn_x, win_w - pw - 8);
+        int py = Overlay::kToolbarHeight + 4;
+        int text_max_w = pw - 24;
+
+        screen_menu_x_ = px; screen_menu_y_ = py;
+        screen_menu_w_ = pw; screen_menu_h_ = ph;
+
+        cairo_set_source_rgba(cr, m3::surface_container_high_r, m3::surface_container_high_g,
+                              m3::surface_container_high_b, 0.95);
+        overlay_.draw_rounded_rect(cr, px, py, pw, ph, 10);
+        cairo_fill(cr);
+        cairo_set_source_rgba(cr, m3::outline_variant_r, m3::outline_variant_g,
+                              m3::outline_variant_b, 0.6);
+        cairo_set_line_width(cr, 1);
+        overlay_.draw_rounded_rect(cr, px, py, pw, ph, 10);
+        cairo_stroke(cr);
+
+        for (int i = 0; i < max_items; i++) {
+            int iy = py + 4 + i * item_h;
+
+            if (i == screen_menu_hover_) {
+                cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                      m3::on_surface_variant_b, 0.08);
+                cairo_rectangle(cr, px + 4, iy, pw - 8, item_h);
+                cairo_fill(cr);
+            }
+
+            std::string display;
+            if (i == 0) {
+                display = "All Screens";
+            } else {
+                auto& out = screenshot_outputs_[i - 1];
+                char buf[128];
+                snprintf(buf, sizeof(buf), "%s  %dx%d", out.name.c_str(), out.width, out.height);
+                display = buf;
+            }
+
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g, m3::on_surface_b, 0.87);
+            cairo_text_extents_t te;
+            cairo_text_extents(cr, display.c_str(), &te);
+            if (te.width > text_max_w) {
+                while (!display.empty()) {
+                    cairo_text_extents(cr, (display + "\u2026").c_str(), &te);
+                    if (te.width <= text_max_w) break;
+                    display.pop_back();
+                }
+                display += "\u2026";
+            }
+            cairo_move_to(cr, px + 12, iy + item_h / 2 + 5);
+            cairo_show_text(cr, display.c_str());
+        }
+    }
+
+    // --- Upload submenu ---
+    if (show_upload_menu_) {
+        int btn_x = 0;
+        for (auto& btn : toolbar_buttons_) {
+            if (btn.label == "Upload") { btn_x = btn.x; break; }
+        }
+        int item_h = 36;
+        int num_items = 1; // Imgur for now
+        const char* items[] = { "Imgur" };
+        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 13);
+
+        int max_label_w = 0;
+        for (int i = 0; i < num_items; i++) {
+            cairo_text_extents_t te;
+            cairo_text_extents(cr, items[i], &te);
+            if (te.width > max_label_w) max_label_w = (int)te.width;
+        }
+        int pw = std::clamp(12 + max_label_w + 12, 140, 300);
+        int ph = 4 + num_items * item_h + 4;
+        int px = std::min(btn_x, win_w - pw - 8);
+        int py = Overlay::kToolbarHeight + 4;
+
+        upload_menu_x_ = px; upload_menu_y_ = py;
+        upload_menu_w_ = pw; upload_menu_h_ = ph;
+
+        cairo_set_source_rgba(cr, m3::surface_container_high_r, m3::surface_container_high_g,
+                              m3::surface_container_high_b, 0.95);
+        overlay_.draw_rounded_rect(cr, px, py, pw, ph, 10);
+        cairo_fill(cr);
+        cairo_set_source_rgba(cr, m3::outline_variant_r, m3::outline_variant_g,
+                              m3::outline_variant_b, 0.6);
+        cairo_set_line_width(cr, 1);
+        overlay_.draw_rounded_rect(cr, px, py, pw, ph, 10);
+        cairo_stroke(cr);
+
+        for (int i = 0; i < num_items; i++) {
+            int iy = py + 4 + i * item_h;
+
+            if (i == upload_menu_hover_) {
+                cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                      m3::on_surface_variant_b, 0.08);
+                cairo_rectangle(cr, px + 4, iy, pw - 8, item_h);
+                cairo_fill(cr);
+            }
+
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g, m3::on_surface_b, 0.87);
+            cairo_move_to(cr, px + 12, iy + item_h / 2 + 5);
+            cairo_show_text(cr, items[i]);
+        }
     }
 
     // --- Crop overlay ---
@@ -546,7 +907,7 @@ void App::present() {
         cairo_set_font_size(cr, 14);
         cairo_move_to(cr, cx + 30, btn_y + 24);
         cairo_show_text(cr, "Apply");
-        crop_buttons.push_back({cx, btn_y, btn_w, btn_h, "CropApply", {}});
+        crop_buttons.push_back({cx, btn_y, btn_w, btn_h, "CropApply", {}, {}});
 
         cx += btn_w + 10;
         cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
@@ -557,7 +918,7 @@ void App::present() {
                               m3::on_surface_b, 0.87);
         cairo_move_to(cr, cx + 26, btn_y + 24);
         cairo_show_text(cr, "Cancel");
-        crop_buttons.push_back({cx, btn_y, btn_w, btn_h, "CropCancel", {}});
+        crop_buttons.push_back({cx, btn_y, btn_w, btn_h, "CropCancel", {}, {}});
 
         for (auto& btn : crop_buttons) {
             if (btn.label == "CropApply") btn.action = [this]() { apply_crop(); };
@@ -600,7 +961,7 @@ void App::present() {
             cairo_move_to(cr, tx + 8, sub_y + 18);
             cairo_show_text(cr, tool_names[i]);
             markup_buttons.push_back({tx, sub_y, tool_btn_w, tool_btn_h,
-                                      "MTool" + std::to_string(i), {}});
+                                      "MTool" + std::to_string(i), {}, {}});
         }
 
         // --- Color hue bar ---
@@ -664,7 +1025,7 @@ void App::present() {
             cairo_move_to(cr, tx + 10, sub_y + 18);
             cairo_show_text(cr, thick_labels[i]);
             markup_buttons.push_back({tx, sub_y, thick_btn_w, thick_btn_h,
-                                      "MThick_" + std::to_string(i), {}});
+                                      "MThick_" + std::to_string(i), {}, {}});
         }
 
         // --- Undo button ---
@@ -685,7 +1046,7 @@ void App::present() {
                                   m3::on_surface_b, markup_elements_.empty() ? 0.3 : 0.87);
             cairo_move_to(cr, ux + 14, uy + 18);
             cairo_show_text(cr, "Undo");
-            markup_buttons.push_back({ux, uy, uw, uh, "MUndo", {}});
+            markup_buttons.push_back({ux, uy, uw, uh, "MUndo", {}, {}});
         }
 
         // Apply / Cancel floating buttons
@@ -702,7 +1063,7 @@ void App::present() {
         cairo_set_font_size(cr, 14);
         cairo_move_to(cr, cx + 30, btn_y + 24);
         cairo_show_text(cr, "Apply");
-        markup_buttons.push_back({cx, btn_y, btn_w, btn_h, "MarkupApply", {}});
+        markup_buttons.push_back({cx, btn_y, btn_w, btn_h, "MarkupApply", {}, {}});
 
         cx += btn_w + 10;
         cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
@@ -713,7 +1074,7 @@ void App::present() {
                               m3::on_surface_b, 0.87);
         cairo_move_to(cr, cx + 26, btn_y + 24);
         cairo_show_text(cr, "Cancel");
-        markup_buttons.push_back({cx, btn_y, btn_w, btn_h, "MarkupCancel", {}});
+        markup_buttons.push_back({cx, btn_y, btn_w, btn_h, "MarkupCancel", {}, {}});
 
         for (auto& btn : markup_buttons) {
             if (btn.label == "MarkupApply") btn.action = [this]() { commit_markup(); };
@@ -830,6 +1191,168 @@ void App::present() {
                                 sidebar_buttons.begin(), sidebar_buttons.end());
     }
 
+    // --- Screenshot panel ---
+    if (screenshot_panel_active_) {
+        screenshot_render_panel(cr, win_w, win_h);
+    }
+
+    // --- Upload setup dialog ---
+    if (show_upload_setup_) {
+        int dw = 500, dh = 340;
+        int dx = (window_width_ - dw) / 2;
+        int dy = (window_height_ - dh) / 2;
+
+        // Dim overlay
+        cairo_set_source_rgba(cr, 0, 0, 0, 0.4);
+        cairo_paint(cr);
+
+        // Dialog background
+        cairo_set_source_rgba(cr, m3::surface_container_high_r, m3::surface_container_high_g,
+                              m3::surface_container_high_b, 0.98);
+        overlay_.draw_rounded_rect(cr, dx, dy, dw, dh, 12);
+        cairo_fill(cr);
+
+        cairo_set_source_rgba(cr, m3::outline_variant_r, m3::outline_variant_g,
+                              m3::outline_variant_b, 0.6);
+        cairo_set_line_width(cr, 1);
+        overlay_.draw_rounded_rect(cr, dx, dy, dw, dh, 12);
+        cairo_stroke(cr);
+
+        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, 16);
+        cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g, m3::on_surface_b, 0.87);
+        cairo_move_to(cr, dx + 20, dy + 28);
+        cairo_show_text(cr, "Imgur Upload Setup");
+
+        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 13);
+
+        int ty = dy + 50;
+        auto draw_text = [&](const char* text, int y) {
+            cairo_move_to(cr, dx + 20, y);
+            cairo_show_text(cr, text);
+        };
+
+        cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                              m3::on_surface_variant_b, 0.87);
+        draw_text("To upload images to Imgur, you need a Client ID.", ty);
+        draw_text("1. Log into your Imgur account in a browser.", ty + 18);
+        draw_text("2. Go to the API registration page (must be logged in):", ty + 36);
+
+        cairo_set_source_rgba(cr, m3::primary_r, m3::primary_g, m3::primary_b, 0.87);
+        draw_text("https://api.imgur.com/oauth2/addclient", ty + 54);
+
+        cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                              m3::on_surface_variant_b, 0.87);
+        draw_text("3. Fill in any app name, leave callback URL blank", ty + 76);
+        draw_text("4. Choose \"Anonymous usage without user authorization\"", ty + 94);
+        draw_text("5. Submit and copy the Client ID", ty + 112);
+        draw_text("6. Paste the Client ID below and click Save", ty + 130);
+
+        // Text input box
+        int box_y = ty + 148;
+        int box_h = 36;
+        cairo_set_source_rgba(cr, m3::surface_container_r, m3::surface_container_g,
+                              m3::surface_container_b, 1.0);
+        overlay_.draw_rounded_rect(cr, dx + 20, box_y, dw - 40, box_h, 8);
+        cairo_fill(cr);
+        cairo_set_source_rgba(cr, m3::outline_r, m3::outline_g, m3::outline_b, 0.6);
+        cairo_set_line_width(cr, 1);
+        overlay_.draw_rounded_rect(cr, dx + 20, box_y, dw - 40, box_h, 8);
+        cairo_stroke(cr);
+
+        // Input text
+        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 14);
+        cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g, m3::on_surface_b, 0.87);
+
+        // Truncate and show text with cursor
+        std::string display = upload_setup_input_;
+        cairo_text_extents_t te;
+        cairo_text_extents(cr, display.c_str(), &te);
+        int max_text_w = dw - 40 - 16;
+        if (te.width > max_text_w) {
+            while (!display.empty()) {
+                cairo_text_extents(cr, display.c_str(), &te);
+                if (te.width <= max_text_w) break;
+                display.erase(0, 1);
+            }
+        }
+        cairo_move_to(cr, dx + 28, box_y + box_h / 2 + 5);
+        cairo_show_text(cr, display.c_str());
+
+        // Cursor
+        cairo_set_source_rgba(cr, m3::primary_r, m3::primary_g, m3::primary_b, 0.87);
+        cairo_set_line_width(cr, 1.5);
+        double cursor_x = dx + 28 + te.width;
+        cairo_move_to(cr, cursor_x, box_y + 8);
+        cairo_line_to(cr, cursor_x, box_y + box_h - 8);
+        cairo_stroke(cr);
+
+        // Buttons
+        int btn_w = 100, btn_h = 36;
+        int btn_y = dy + dh - 20 - btn_h;
+        int save_x = dx + dw - 20 - btn_w;
+        int cancel_x = save_x - btn_w - 10;
+
+        auto draw_btn = [&](int bx, const char* label, bool primary, bool hovered) {
+            if (primary) {
+                cairo_set_source_rgba(cr, m3::primary_container_r, m3::primary_container_g,
+                                      m3::primary_container_b, hovered ? 0.9 : 0.8);
+            } else {
+                cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                      m3::on_surface_variant_b, hovered ? 0.15 : 0.1);
+            }
+            overlay_.draw_rounded_rect(cr, bx, btn_y, btn_w, btn_h, 8);
+            cairo_fill(cr);
+
+            cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                                   CAIRO_FONT_WEIGHT_NORMAL);
+            cairo_set_font_size(cr, 14);
+            cairo_set_source_rgba(cr, primary ? m3::on_primary_container_r : m3::on_surface_r,
+                                  primary ? m3::on_primary_container_g : m3::on_surface_g,
+                                  primary ? m3::on_primary_container_b : m3::on_surface_b,
+                                  primary ? 1.0 : 0.87);
+            cairo_text_extents_t te2;
+            cairo_text_extents(cr, label, &te2);
+            cairo_move_to(cr, bx + (btn_w - te2.width) / 2, btn_y + btn_h / 2 + 5);
+            cairo_show_text(cr, label);
+        };
+
+        draw_btn(cancel_x, "Cancel", false, upload_setup_hover_btn_ == 0);
+        draw_btn(save_x, "Save", true, upload_setup_hover_btn_ == 1);
+    }
+
+    // --- Toolbar tooltip ---
+    if (show_toolbar_ && toolbar_hover_idx_ >= 0 &&
+        toolbar_hover_idx_ < (int)toolbar_buttons_.size()) {
+        auto& btn = toolbar_buttons_[toolbar_hover_idx_];
+        if (!btn.tooltip.empty()) {
+            cairo_save(cr);
+            cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                                   CAIRO_FONT_WEIGHT_NORMAL);
+            cairo_set_font_size(cr, 13);
+            cairo_text_extents_t te;
+            cairo_text_extents(cr, btn.tooltip.c_str(), &te);
+            int pad = 8;
+            int tw = (int)te.width + pad * 2;
+            int th = (int)te.height + pad * 2;
+            int tx = btn.x + (btn.w - tw) / 2;
+            int ty = btn.y + btn.h + 6;
+            if (tx < 4) tx = 4;
+            if (tx + tw > win_w - 4) tx = win_w - tw - 4;
+            cairo_set_source_rgba(cr, m3::surface_container_r, m3::surface_container_g,
+                                  m3::surface_container_b, 0.95);
+            overlay_.draw_rounded_rect(cr, tx, ty, tw, th, 6);
+            cairo_fill(cr);
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
+                                  m3::on_surface_b, 0.87);
+            cairo_move_to(cr, tx + pad, ty + pad + (int)te.height - 3);
+            cairo_show_text(cr, btn.tooltip.c_str());
+            cairo_restore(cr);
+        }
+    }
+
     cairo_destroy(cr);
     cairo_surface_destroy(cs);
 
@@ -870,12 +1393,43 @@ void App::on_close() {
 void App::on_key(const KeyEvent& ev) {
     if (ev.state != WL_KEYBOARD_KEY_STATE_PRESSED) return;
 
+    // Upload setup dialog keyboard input
+    if (show_upload_setup_) {
+        if (ev.sym == XKB_KEY_Escape) {
+            show_upload_setup_ = false;
+            render();
+            return;
+        }
+        if (ev.sym == XKB_KEY_Return || ev.sym == XKB_KEY_KP_Enter) {
+            if (!upload_setup_input_.empty()) {
+                config_.imgur_client_id = upload_setup_input_;
+                Config::save(config_);
+                show_upload_setup_ = false;
+                upload_image();
+            }
+            return;
+        }
+        if (ev.sym == XKB_KEY_BackSpace) {
+            if (!upload_setup_input_.empty()) {
+                upload_setup_input_.pop_back();
+                render();
+            }
+            return;
+        }
+        if (ev.utf8_len > 0 && ev.utf8[0] >= 0x20 && ev.utf8[0] < 0x7F) {
+            upload_setup_input_ += std::string(ev.utf8, ev.utf8_len);
+            render();
+            return;
+        }
+        return; // consume all keys while dialog is active
+    }
+
     switch (ev.sym) {
         case XKB_KEY_q:
             if (ev.ctrl) quit();
             break;
         case XKB_KEY_z:
-            if (ev.ctrl && markup_active_) { undo_markup(); break; }
+            if (ev.ctrl && !markup_elements_.empty()) { undo_markup(); break; }
             break;
         case XKB_KEY_o:
             if (ev.ctrl) open_file_dialog();
@@ -885,8 +1439,10 @@ void App::on_key(const KeyEvent& ev) {
             toggle_fullscreen();
             break;
         case XKB_KEY_Escape:
+            if (show_upload_setup_) { show_upload_setup_ = false; render(); break; }
             if (markup_active_) { cancel_markup(); break; }
             if (crop_active_) { cancel_crop(); break; }
+            if (show_upload_menu_) { show_upload_menu_ = false; render(); break; }
             if (show_menu_) { show_menu_ = false; render(); break; }
             if (show_sidebar_) { toggle_sidebar(); break; }
             if (show_settings_) { toggle_settings(); break; }
@@ -953,7 +1509,49 @@ void App::on_key(const KeyEvent& ev) {
 void App::on_pointer(const PointerEvent& ev) {
     if (ev.button != 0x110) return; // BTN_LEFT
 
+    SC_LOG("on_pointer: state=%d x=%d y=%d panel_active=%d",
+           ev.state, ev.x, ev.y, (int)screenshot_panel_active_);
+
     if (ev.state == WL_POINTER_BUTTON_STATE_PRESSED) {
+        // Upload setup dialog takes full priority
+        if (show_upload_setup_) {
+        int dw = 500, dh = 340;
+            int dx = (window_width_ - dw) / 2;
+            int dy = (window_height_ - dh) / 2;
+            // Outside click closes
+            if (!(ev.x >= dx && ev.x < dx + dw && ev.y >= dy && ev.y < dy + dh)) {
+                show_upload_setup_ = false;
+                render();
+                return;
+            }
+            // Save button
+            int btn_w = 100, btn_h = 36;
+            int btn_y = dy + dh - 20 - btn_h;
+            int save_x = dx + dw - 20 - btn_w;
+            int cancel_x = save_x - btn_w - 10;
+            if (ev.x >= save_x && ev.x < save_x + btn_w && ev.y >= btn_y && ev.y < btn_y + btn_h) {
+                if (!upload_setup_input_.empty()) {
+                    config_.imgur_client_id = upload_setup_input_;
+                    Config::save(config_);
+                    show_upload_setup_ = false;
+                    upload_image();
+                }
+                return;
+            }
+            if (ev.x >= cancel_x && ev.x < cancel_x + btn_w && ev.y >= btn_y && ev.y < btn_y + btn_h) {
+                show_upload_setup_ = false;
+                render();
+                return;
+            }
+            return; // consume click inside dialog
+        }
+
+        // Screenshot panel takes full priority when active
+        if (screenshot_panel_active_) {
+            screenshot_handle_click(ev.x, ev.y);
+            return;
+        }
+
         // Sidebar hit-test — consume clicks below toolbar area
         if (show_sidebar_ && ev.y >= Overlay::kToolbarHeight) {
             int sw = 320;
@@ -1034,6 +1632,82 @@ void App::on_pointer(const PointerEvent& ev) {
                 render();
                 return;
             }
+        }
+
+        // Window capture dropdown
+        if (show_window_menu_) {
+            if (!(ev.x >= window_menu_x_ && ev.x < window_menu_x_ + window_menu_w_ &&
+                  ev.y >= window_menu_y_ && ev.y < window_menu_y_ + window_menu_h_)) {
+                show_window_menu_ = false;
+                render();
+                return;
+            }
+            int item_h = 36;
+            int rel_y = ev.y - (window_menu_y_ + 4);
+            if (rel_y >= 0) {
+                int idx = rel_y / item_h;
+                if (idx >= 0 && idx < (int)screenshot_windows_.size()) {
+                    show_window_menu_ = false;
+                    screenshot_source_ = hpv::sc::Source::Window;
+                    screenshot_sel_window_ = idx;
+                    screenshot_trigger_capture();
+                    return;
+                }
+            }
+            render();
+            return;
+        }
+
+        // Screen capture dropdown
+        if (show_screen_menu_) {
+            if (!(ev.x >= screen_menu_x_ && ev.x < screen_menu_x_ + screen_menu_w_ &&
+                  ev.y >= screen_menu_y_ && ev.y < screen_menu_y_ + screen_menu_h_)) {
+                show_screen_menu_ = false;
+                render();
+                return;
+            }
+            int item_h = 36;
+            int rel_y = ev.y - (screen_menu_y_ + 4);
+            if (rel_y >= 0) {
+                int idx = rel_y / item_h;
+                if (idx >= 0) {
+                    show_screen_menu_ = false;
+                    screenshot_source_ = hpv::sc::Source::Screen;
+                    if (idx == 0) {
+                        screenshot_capture_all_ = true;
+                        screenshot_sel_output_ = -1;
+                    } else {
+                        screenshot_capture_all_ = false;
+                        screenshot_sel_output_ = idx - 1;
+                    }
+                    screenshot_trigger_capture();
+                    return;
+                }
+            }
+            render();
+            return;
+        }
+
+        // Upload submenu
+        if (show_upload_menu_) {
+            if (!(ev.x >= upload_menu_x_ && ev.x < upload_menu_x_ + upload_menu_w_ &&
+                  ev.y >= upload_menu_y_ && ev.y < upload_menu_y_ + upload_menu_h_)) {
+                show_upload_menu_ = false;
+                render();
+                return;
+            }
+            int item_h = 36;
+            int rel_y = ev.y - (upload_menu_y_ + 4);
+            if (rel_y >= 0) {
+                int idx = rel_y / item_h;
+                if (idx == 0) {
+                    show_upload_menu_ = false;
+                    upload_image();
+                    return;
+                }
+            }
+            render();
+            return;
         }
 
         // Crop mode: drag rectangle or handles
@@ -1244,6 +1918,32 @@ void App::on_motion(int x, int y) {
     pointer_x_ = x;
     pointer_y_ = y;
 
+    // Screenshot panel hover tracking
+    if (screenshot_panel_active_) {
+        screenshot_handle_motion(x, y);
+        // Don't return — allow toolbar hover tracking too
+    }
+
+    // Upload setup dialog hover tracking
+    if (show_upload_setup_) {
+        int new_hover = -1;
+        int dw = 480, dh = 280;
+        int dx = (window_width_ - dw) / 2;
+        int dy = (window_height_ - dh) / 2;
+        int btn_w = 100, btn_h = 36;
+        int btn_y = dy + dh - 20 - btn_h;
+        int save_x = dx + dw - 20 - btn_w;
+        int cancel_x = save_x - btn_w - 10;
+        if (x >= cancel_x && x < cancel_x + btn_w && y >= btn_y && y < btn_y + btn_h)
+            new_hover = 0;
+        else if (x >= save_x && x < save_x + btn_w && y >= btn_y && y < btn_y + btn_h)
+            new_hover = 1;
+        if (new_hover != upload_setup_hover_btn_) {
+            upload_setup_hover_btn_ = new_hover;
+            pending_redraw_ = true;
+        }
+    }
+
     // 1. Active settings slider drag (highest priority)
     if (active_slider_) {
         if (!show_settings_) {
@@ -1345,6 +2045,51 @@ void App::on_motion(int x, int y) {
         }
         render();
         return;
+    }
+
+    // 2.75 Window menu hover tracking
+    if (show_window_menu_) {
+        int new_hover = -1;
+        if (x >= window_menu_x_ && x < window_menu_x_ + window_menu_w_ &&
+            y >= window_menu_y_ && y < window_menu_y_ + window_menu_h_) {
+            int item_h = 36;
+            int rel_y = y - (window_menu_y_ + 4);
+            if (rel_y >= 0) new_hover = rel_y / item_h;
+        }
+        if (new_hover != window_menu_hover_) {
+            window_menu_hover_ = new_hover;
+            pending_redraw_ = true;
+        }
+    }
+
+    // 2.8 Screen menu hover tracking
+    if (show_screen_menu_) {
+        int new_hover = -1;
+        if (x >= screen_menu_x_ && x < screen_menu_x_ + screen_menu_w_ &&
+            y >= screen_menu_y_ && y < screen_menu_y_ + screen_menu_h_) {
+            int item_h = 36;
+            int rel_y = y - (screen_menu_y_ + 4);
+            if (rel_y >= 0) new_hover = rel_y / item_h;
+        }
+        if (new_hover != screen_menu_hover_) {
+            screen_menu_hover_ = new_hover;
+            pending_redraw_ = true;
+        }
+    }
+
+    // 2.9 Upload menu hover tracking
+    if (show_upload_menu_) {
+        int new_hover = -1;
+        if (x >= upload_menu_x_ && x < upload_menu_x_ + upload_menu_w_ &&
+            y >= upload_menu_y_ && y < upload_menu_y_ + upload_menu_h_) {
+            int item_h = 36;
+            int rel_y = y - (upload_menu_y_ + 4);
+            if (rel_y >= 0) new_hover = rel_y / item_h;
+        }
+        if (new_hover != upload_menu_hover_) {
+            upload_menu_hover_ = new_hover;
+            pending_redraw_ = true;
+        }
     }
 
     // 3. Toolbar button hover tracking
@@ -1555,7 +2300,7 @@ int App::run() {
     while (running_) {
         wl_display_flush(conn_.display());
 
-        int timeout = slideshow_ ? config_.slideshow_interval_ms : -1;
+        int timeout = slideshow_ ? config_.slideshow_interval_ms : 100;
         int ret = poll(fds, nfds, timeout);
         if (ret < 0) break;
 
@@ -1585,12 +2330,797 @@ int App::run() {
 
         process_thumb_batch();
 
+        if (screenshot_capture_pending_.exchange(false)) {
+            if (screenshot_preview_) {
+                cairo_surface_destroy(screenshot_preview_);
+                screenshot_preview_ = nullptr;
+            }
+            pending_redraw_ = true;
+        }
+
+        if (screenshot_open_pending_.exchange(false)) {
+            screenshot_panel_active_ = false;
+            open_file(screenshot_open_path_);
+            pending_redraw_ = true;
+        }
+
         if (pending_redraw_) {
             render();
         }
     }
 
     return 0;
+}
+
+// --- Upload ---
+
+#ifdef HAVE_LIBCURL
+void App::upload_image() {
+    if (decoded_image_.rgba.empty()) return;
+
+    const auto& client_id = config_.imgur_client_id.empty()
+        ? Config::kDefaultImgurClientId
+        : config_.imgur_client_id;
+
+    std::string png = render_current_image_to_png();
+    if (png.empty()) {
+        std::cout << "Upload: failed to render image\n";
+        return;
+    }
+
+    std::string url, error;
+    if (upload_to_imgur(png, client_id, url, error)) {
+        std::cout << "Uploaded: " << url << "\n";
+        ensure_screenshot_clipboard();
+        if (screenshot_clipboard_.is_available()) {
+            screenshot_clipboard_.copy_data("text/plain", url);
+        }
+        // Open browser with result
+        pid_t pid = fork();
+        if (pid == 0) {
+            execlp("xdg-open", "xdg-open", url.c_str(), nullptr);
+            _exit(1);
+        }
+    } else {
+        std::cerr << "Upload failed: " << error << "\n";
+    }
+}
+#else
+void App::upload_image() {
+    std::cout << "Upload: libcurl not available. Rebuild with -Dcurl=enabled\n";
+}
+#endif
+
+// --- Screenshot methods ---
+
+void App::screenshot_screen() {
+    std::string out_path = "/tmp/horizon-capture.png";
+    bool ok = hpv::sc::capture_screen(conn_, out_path);
+    if (ok) open_file(out_path);
+}
+
+void App::screenshot_window() {
+    screenshot_source_ = hpv::sc::Source::Window;
+    screenshot_sel_output_ = -1;
+    screenshot_sel_window_ = -1;
+    screenshot_capture_all_ = false;
+    if (!screenshot_panel_active_) {
+        screenshot_panel_active_ = true;
+    }
+    refresh_screenshot_lists();
+    render();
+}
+
+void App::screenshot_focused() {
+    std::string out_path = "/tmp/horizon-capture.png";
+    bool ok = hpv::sc::capture_focused_window(conn_, out_path);
+    if (ok) open_file(out_path);
+}
+
+void App::screenshot_selection() {
+    std::string out_path = "/tmp/horizon-capture.png";
+    conn_.refresh_logical_outputs();
+    auto bounds = conn_.logical_output_bounds();
+    bool ok = hpv::sc::capture_selection_interactive(conn_, bounds, out_path);
+    if (ok) {
+        wl_display_roundtrip(conn_.display());
+        open_file(out_path);
+    }
+}
+
+struct PngWriteState {
+    std::string data;
+};
+
+static cairo_status_t png_write_callback(void* closure, const unsigned char* data, unsigned int length) {
+    auto* state = static_cast<PngWriteState*>(closure);
+    state->data.append(reinterpret_cast<const char*>(data), length);
+    return CAIRO_STATUS_SUCCESS;
+}
+
+std::string App::render_current_image_to_png() {
+    if (decoded_image_.rgba.empty()) return {};
+
+    int w = decoded_image_.width;
+    int h = decoded_image_.height;
+
+    cairo_surface_t* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+    if (cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) return {};
+
+    uint8_t* dst = cairo_image_surface_get_data(surf);
+    int stride = cairo_image_surface_get_stride(surf);
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            int si = (y * w + x) * 4;
+            int di = y * stride + x * 4;
+            uint8_t r = decoded_image_.rgba[si + 0];
+            uint8_t g = decoded_image_.rgba[si + 1];
+            uint8_t b = decoded_image_.rgba[si + 2];
+            uint8_t a = decoded_image_.rgba[si + 3];
+            uint16_t alpha = a;
+            dst[di + 0] = (uint8_t)((uint16_t)b * alpha / 255);
+            dst[di + 1] = (uint8_t)((uint16_t)g * alpha / 255);
+            dst[di + 2] = (uint8_t)((uint16_t)r * alpha / 255);
+            dst[di + 3] = a;
+        }
+    }
+    cairo_surface_mark_dirty(surf);
+
+    if (!markup_elements_.empty()) {
+        cairo_t* cr = cairo_create(surf);
+        cairo_scale(cr, (double)w / orig_img_w_, (double)h / orig_img_h_);
+        draw_markup_elements(cr);
+        cairo_destroy(cr);
+    }
+
+    PngWriteState state;
+    cairo_surface_write_to_png_stream(surf, png_write_callback, &state);
+    cairo_surface_destroy(surf);
+
+    return state.data;
+}
+
+void App::ensure_screenshot_clipboard() {
+    if (!screenshot_clipboard_inited_) {
+        screenshot_clipboard_inited_ = true;
+        if (auto* ext = conn_.ext_data_control_manager()) {
+            screenshot_clipboard_.bind_ext(ext, conn_.seat(), conn_.display());
+        } else if (auto* wlr = conn_.wlr_data_control_manager()) {
+            screenshot_clipboard_.bind_wlr(wlr, conn_.seat(), conn_.display());
+        }
+    }
+}
+
+void App::screenshot_copy() {
+    ensure_screenshot_clipboard();
+    if (!screenshot_clipboard_.is_available()) return;
+
+    if (!decoded_image_.rgba.empty()) {
+        std::string png = render_current_image_to_png();
+        if (!png.empty()) {
+            screenshot_clipboard_.copy_data("image/png", std::move(png));
+            return;
+        }
+    }
+
+    // Fallback: capture fresh screenshot
+    std::string out_path = "/tmp/horizon-capture.png";
+    bool ok = hpv::sc::capture_screen(conn_, out_path);
+    if (ok) {
+        FILE* f = fopen(out_path.c_str(), "rb");
+        if (f) {
+            fseek(f, 0, SEEK_END);
+            long fsize = ftell(f);
+            rewind(f);
+            std::string png_data(static_cast<std::string::size_type>(fsize), '\0');
+            size_t nread = fread(png_data.data(), 1, static_cast<size_t>(fsize), f);
+            fclose(f);
+            if (static_cast<long>(nread) == fsize) {
+                screenshot_clipboard_.copy_data("image/png", std::move(png_data));
+            }
+        }
+        unlink(out_path.c_str());
+    }
+}
+
+// --- Screenshot panel ---
+
+void App::toggle_screenshot_panel() {
+    screenshot_panel_active_ = !screenshot_panel_active_;
+    SC_LOG("toggle_screenshot_panel: active=%d", (int)screenshot_panel_active_);
+    show_window_menu_ = false;
+    show_screen_menu_ = false;
+    if (screenshot_panel_active_) {
+        if (!screenshot_icon_cache_inited_) {
+            screenshot_icon_cache_.set_icon_theme(hpv::sc::detect_system_icon_theme());
+            screenshot_icon_cache_inited_ = true;
+        }
+        refresh_screenshot_lists();
+    }
+    render();
+}
+
+void App::refresh_screenshot_lists() {
+    // Refresh output list from Wayland connection
+    auto outputs = hpv::sc::list_outputs(conn_);
+    screenshot_outputs_ = std::move(outputs);
+
+    // Check if any toplevel protocol is available (already bound during registry_global)
+    screenshot_toplevel_avail_ = conn_.has_any_toplevel_list();
+
+    screenshot_windows_.clear();
+
+    // Give the compositor a chance to send pending toplevel events
+    wl_display_roundtrip(conn_.display());
+    wl_display_roundtrip(conn_.display());
+
+    if (conn_.has_ext_foreign_toplevel_list()) {
+        for (const auto& tl : conn_.ext_foreign_toplevels().list()) {
+            hpv::sc::WindowEntry entry;
+            entry.handle = tl.handle;
+            entry.appId = tl.appId;
+            entry.title = tl.title;
+            entry.identifier = tl.identifier;
+            screenshot_windows_.push_back(std::move(entry));
+        }
+    } else if (conn_.has_wlr_foreign_toplevel_manager()) {
+        for (const auto& tl : conn_.wlr_foreign_toplevels().list()) {
+            hpv::sc::WindowEntry entry;
+            entry.handle = nullptr;
+            entry.wlr_handle = tl.handle;
+            entry.appId = tl.appId;
+            entry.title = tl.title;
+            screenshot_windows_.push_back(std::move(entry));
+        }
+    }
+
+    if (screenshot_sel_window_ >= static_cast<int>(screenshot_windows_.size())) {
+        screenshot_sel_window_ = screenshot_windows_.empty() ? -1 : 0;
+    }
+}
+
+void App::screenshot_trigger_capture() {
+    SC_LOG("screenshot_trigger_capture: source=%d capture_all=%d sel_output=%d sel_window=%d",
+           (int)screenshot_source_, (int)screenshot_capture_all_,
+           screenshot_sel_output_, screenshot_sel_window_);
+
+    auto capture_and_load = [this](const std::string& path, bool ok) {
+        if (screenshot_preview_) {
+            cairo_surface_destroy(screenshot_preview_);
+            screenshot_preview_ = nullptr;
+        }
+        if (ok) {
+            auto img = hpv::sc::load_capture(path);
+            {
+                std::lock_guard<std::mutex> lock(screenshot_captured_mutex_);
+                screenshot_captured_ = std::move(img);
+            }
+            screenshot_zoom_ = 1.0;
+            screenshot_pan_x_ = 0.0;
+            screenshot_pan_y_ = 0.0;
+            screenshot_last_path_ = path;
+        } else {
+            screenshot_status_ = "Capture failed";
+        }
+    };
+
+    std::string out_path = "/tmp/horizon-panel-capture.png";
+
+    // Use the viewer's own connection for all captures (matching Horizon-shot's UI pattern)
+    switch (screenshot_source_) {
+    case hpv::sc::Source::Focused: {
+        bool ok = hpv::sc::capture_focused_window(conn_, out_path);
+        capture_and_load(out_path, ok);
+        if (ok) screenshot_open_result(out_path);
+        return;
+    }
+    case hpv::sc::Source::Window: {
+        if (screenshot_sel_window_ >= 0 &&
+            screenshot_sel_window_ < (int)screenshot_windows_.size()) {
+            auto* handle = screenshot_windows_[screenshot_sel_window_].handle;
+            bool ok = hpv::sc::capture_window_by_handle(conn_, handle, out_path);
+            capture_and_load(out_path, ok);
+            if (ok) screenshot_open_result(out_path);
+        } else {
+            screenshot_status_ = "No window selected";
+        }
+        return;
+    }
+    case hpv::sc::Source::Screen: {
+        bool ok;
+        if (screenshot_capture_all_) {
+            ok = hpv::sc::capture_all_screens(conn_, out_path);
+        } else if (screenshot_sel_output_ >= 0 &&
+                   screenshot_sel_output_ < (int)screenshot_outputs_.size()) {
+            ok = hpv::sc::capture_output(conn_, screenshot_outputs_[screenshot_sel_output_].output, out_path);
+        } else {
+            ok = hpv::sc::capture_screen(conn_, out_path);
+        }
+        capture_and_load(out_path, ok);
+        if (ok) screenshot_open_result(out_path);
+        return;
+    }
+    case hpv::sc::Source::Selection: {
+        conn_.refresh_logical_outputs();
+        auto bounds = conn_.logical_output_bounds();
+        bool ok = hpv::sc::capture_selection_interactive(conn_, bounds, out_path);
+        if (ok) wl_display_roundtrip(conn_.display());
+        capture_and_load(out_path, ok);
+        if (ok) screenshot_open_result(out_path);
+        return;
+    }
+    default:
+        screenshot_status_ = "Unknown capture source";
+        return;
+    }
+}
+
+void App::screenshot_open_result(const std::string& path) {
+    open_file(path);
+}
+
+static int screenshot_panel_compute_width(int win_w) {
+    return std::min(360, win_w - 100);
+}
+
+void App::screenshot_render_panel(cairo_t* cr, int win_w, int win_h) {
+    int pw = screenshot_panel_compute_width(win_w);
+    int ph = win_h - Overlay::kToolbarHeight;
+    int px = win_w - pw;
+    int py = Overlay::kToolbarHeight;
+
+    // Store panel geometry for hit-testing
+    screenshot_panel_x_ = px;
+    screenshot_panel_y_ = py;
+    screenshot_panel_w_ = pw;
+    screenshot_panel_h_ = ph;
+
+    // Panel background
+    cairo_set_source_rgba(cr, m3::surface_r, m3::surface_g, m3::surface_b, 0.95);
+    cairo_rectangle(cr, px, py, pw, ph);
+    cairo_fill(cr);
+
+    // Title bar
+    int title_h = 40;
+    cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g, m3::on_surface_b, 0.87);
+    cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+    cairo_set_font_size(cr, 16);
+    cairo_move_to(cr, px + 12, py + 26);
+    cairo_show_text(cr, "Screenshot");
+
+    // Close button (X)
+    int close_x = px + pw - 36;
+    int close_y = py + 4;
+    cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g, m3::on_surface_b, 0.6);
+    cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, 18);
+    cairo_move_to(cr, close_x + 10, close_y + 24);
+    cairo_show_text(cr, "\u2715");
+
+    // Separator
+    cairo_set_source_rgba(cr, m3::outline_variant_r, m3::outline_variant_g,
+                          m3::outline_variant_b, 0.5);
+    cairo_move_to(cr, px + 8, py + title_h);
+    cairo_line_to(cr, px + pw - 8, py + title_h);
+    cairo_set_line_width(cr, 1);
+    cairo_stroke(cr);
+
+    int cx = px + 12;
+    int content_y = py + title_h + 12;
+    int content_w = pw - 24;
+
+    // --- Source selection (2x2 grid) ---
+    int grid_gap = 6;
+    int cell_w = (content_w - grid_gap) / 2;
+    int cell_h = 34;
+    const char* source_names[] = { "Focused", "Window", "Screen", "Selection" };
+    hpv::sc::Source source_vals[] = {
+        hpv::sc::Source::Focused, hpv::sc::Source::Window,
+        hpv::sc::Source::Screen, hpv::sc::Source::Selection
+    };
+    int grid_y = content_y;
+    cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+    cairo_set_font_size(cr, 13);
+    for (int i = 0; i < 4; i++) {
+        int gx = cx + (i % 2) * (cell_w + grid_gap);
+        int gy = grid_y + (i / 2) * (cell_h + grid_gap);
+        bool selected = (source_vals[i] == screenshot_source_);
+        if (selected) {
+            cairo_set_source_rgba(cr, m3::primary_r, m3::primary_g, m3::primary_b, 0.15);
+        } else if (i == screenshot_hovered_item_ && screenshot_hovered_area_ == 0) {
+            cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                  m3::on_surface_variant_b, 0.08);
+        } else {
+            cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                  m3::on_surface_variant_b, 0.06);
+        }
+        overlay_.draw_rounded_rect(cr, gx, gy, cell_w, cell_h, 6);
+        cairo_fill(cr);
+        if (selected) {
+            cairo_set_source_rgba(cr, m3::primary_r, m3::primary_g, m3::primary_b, 1.0);
+        } else {
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g, m3::on_surface_b, 0.87);
+        }
+        double tw = 0;
+        cairo_text_extents_t te;
+        cairo_text_extents(cr, source_names[i], &te);
+        tw = te.width;
+        cairo_move_to(cr, gx + (cell_w - tw) / 2, gy + cell_h / 2 + 5);
+        cairo_show_text(cr, source_names[i]);
+    }
+
+    int list_y = grid_y + 2 * (cell_h + grid_gap) + 12;
+
+    // --- List (outputs or windows) ---
+    int list_h = ph - (list_y - py) - 60; // leave room for export bar
+    if (list_h < 40) list_h = 40;
+    int list_item_h = 32;
+
+    if (screenshot_source_ == hpv::sc::Source::Screen) {
+        // Output list
+        cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g, m3::on_surface_b, 0.6);
+        cairo_set_font_size(cr, 11);
+        cairo_move_to(cr, cx, list_y - 2);
+        cairo_show_text(cr, "Outputs");
+
+        list_y += 14;
+        int avail = list_h - 14;
+        int max_items = avail / list_item_h;
+        int start = 0;
+        int count = std::min(max_items, (int)screenshot_outputs_.size() + 1);
+        for (int i = start; i < count; i++) {
+            int iy = list_y + i * list_item_h;
+            bool is_all = (i == 0);
+            bool sel = is_all ? screenshot_capture_all_
+                              : (i - 1 == screenshot_sel_output_);
+            int list_idx = is_all ? -1 : i - 1;
+
+            // Background
+            if (sel) {
+                cairo_set_source_rgba(cr, m3::primary_r, m3::primary_g, m3::primary_b, 0.12);
+            } else if (screenshot_hovered_area_ == 1 && screenshot_hovered_item_ == i) {
+                cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                      m3::on_surface_variant_b, 0.08);
+            }
+            if (sel || (screenshot_hovered_area_ == 1 && screenshot_hovered_item_ == i)) {
+                cairo_rectangle(cr, cx, iy, content_w, list_item_h);
+                cairo_fill(cr);
+            }
+
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g, m3::on_surface_b, 0.87);
+            cairo_set_font_size(cr, 13);
+            const char* label = is_all ? "All Screens" : screenshot_outputs_[list_idx].name.c_str();
+            cairo_move_to(cr, cx + 8, iy + 20);
+            cairo_show_text(cr, label);
+
+            // Resolution text
+            if (!is_all) {
+                char res[64];
+                snprintf(res, sizeof(res), "%dx%d",
+                         screenshot_outputs_[list_idx].width,
+                         screenshot_outputs_[list_idx].height);
+                cairo_set_font_size(cr, 10);
+                cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
+                                      m3::on_surface_b, 0.5);
+                cairo_move_to(cr, cx + content_w - 80, iy + 20);
+                cairo_show_text(cr, res);
+            }
+        }
+    } else if (screenshot_source_ == hpv::sc::Source::Window) {
+        // Window list
+        cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g, m3::on_surface_b, 0.6);
+        cairo_set_font_size(cr, 11);
+        cairo_move_to(cr, cx, list_y - 2);
+        cairo_show_text(cr, "Windows");
+
+        list_y += 14;
+        int avail = list_h - 14;
+        int max_items = avail / list_item_h;
+        if (screenshot_windows_.empty()) {
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g, m3::on_surface_b, 0.4);
+            cairo_set_font_size(cr, 12);
+            const char* msg = screenshot_toplevel_avail_
+                ? "No windows found" : "Window list not available";
+            cairo_move_to(cr, cx + 8, list_y + 20);
+            cairo_show_text(cr, msg);
+        } else {
+            int count = std::min(max_items, (int)screenshot_windows_.size());
+            int icon_size = 20;
+            for (int i = 0; i < count; i++) {
+                int iy = list_y + i * list_item_h;
+                bool sel = (i == screenshot_sel_window_);
+
+                if (sel) {
+                    cairo_set_source_rgba(cr, m3::primary_r, m3::primary_g, m3::primary_b, 0.12);
+                } else if (screenshot_hovered_area_ == 1 && screenshot_hovered_item_ == i) {
+                    cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                          m3::on_surface_variant_b, 0.08);
+                }
+                if (sel || (screenshot_hovered_area_ == 1 && screenshot_hovered_item_ == i)) {
+                    cairo_rectangle(cr, cx, iy, content_w, list_item_h);
+                    cairo_fill(cr);
+                }
+
+                auto& we = screenshot_windows_[i];
+                int icon_x = cx + 8;
+                int icon_y = iy + (list_item_h - icon_size) / 2;
+
+                const auto* icon = screenshot_icon_cache_.app_icon(we.appId);
+                if (icon && icon->surface) {
+                    cairo_save(cr);
+                    double scale = static_cast<double>(icon_size) / icon->width;
+                    cairo_translate(cr, icon_x, icon_y);
+                    cairo_scale(cr, scale, scale);
+                    cairo_set_source_surface(cr, icon->surface, 0, 0);
+                    cairo_paint(cr);
+                    cairo_restore(cr);
+                } else {
+                    cairo_set_source_rgba(cr, 0.25, 0.28, 0.35, 1.0);
+                    cairo_arc(cr, icon_x + icon_size / 2, icon_y + icon_size / 2,
+                              icon_size / 2, 0, 2 * M_PI);
+                    cairo_fill(cr);
+
+                    std::string label = we.appId.empty() ? we.title : we.appId;
+                    if (label.empty()) label = "(unnamed)";
+                    char initial[2] = {static_cast<char>(std::toupper((unsigned char)label[0])), 0};
+                    cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                          m3::on_surface_variant_b, 0.7);
+                    cairo_set_font_size(cr, 10);
+                    cairo_text_extents_t te;
+                    cairo_text_extents(cr, initial, &te);
+                    cairo_move_to(cr, icon_x + icon_size / 2 - te.width / 2,
+                                  icon_y + icon_size / 2 + te.height / 2);
+                    cairo_show_text(cr, initial);
+                }
+
+                cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g, m3::on_surface_b, 0.87);
+                cairo_set_font_size(cr, 13);
+                cairo_move_to(cr, cx + 8 + icon_size + 8, iy + 20);
+                cairo_show_text(cr, we.title.empty() ? we.appId.c_str() : we.title.c_str());
+            }
+        }
+    }
+
+    // --- Export bar ---
+    int export_y = ph - 52;
+    int btn_w = (content_w - 8) / 3;
+    int btn_h = 36;
+    const char* export_labels[] = { "Save", "Copy", "Save As" };
+    for (int i = 0; i < 3; i++) {
+        int bx = cx + i * (btn_w + 4);
+        int by = py + export_y;
+        bool hovered = (screenshot_hovered_area_ == 2 && screenshot_hovered_item_ == i);
+        if (hovered) {
+            cairo_set_source_rgba(cr, m3::primary_r, m3::primary_g, m3::primary_b, 0.15);
+        } else {
+            cairo_set_source_rgba(cr, m3::primary_r, m3::primary_g, m3::primary_b, 0.1);
+        }
+        overlay_.draw_rounded_rect(cr, bx, by, btn_w, btn_h, 8);
+        cairo_fill(cr);
+
+        cairo_set_source_rgba(cr, m3::primary_r, m3::primary_g, m3::primary_b, 1.0);
+        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+        cairo_set_font_size(cr, 13);
+        double tw2 = 0;
+        cairo_text_extents_t te2;
+        cairo_text_extents(cr, export_labels[i], &te2);
+        tw2 = te2.width;
+        cairo_move_to(cr, bx + (btn_w - tw2) / 2, by + btn_h / 2 + 5);
+        cairo_show_text(cr, export_labels[i]);
+    }
+}
+
+bool App::screenshot_handle_click(int x, int y) {
+    if (!screenshot_panel_active_) return false;
+    SC_LOG("screenshot_handle_click: x=%d y=%d panel=(%d,%d %dx%d)",
+           x, y, screenshot_panel_x_, screenshot_panel_y_,
+           screenshot_panel_w_, screenshot_panel_h_);
+
+    int cx = screenshot_panel_x_ + 12;
+    int pw = screenshot_panel_w_ - 24;
+
+    // Close button (X) hit test
+    int close_x = screenshot_panel_x_ + screenshot_panel_w_ - 36;
+    int close_y = screenshot_panel_y_ + 4;
+    if (x >= close_x && x < close_x + 32 && y >= close_y && y < close_y + 32) {
+        SC_LOG("screenshot_handle_click: close button");
+        screenshot_panel_active_ = false;
+        render();
+        return true;
+    }
+
+    // Outside panel - close
+    if (x < screenshot_panel_x_ || x >= screenshot_panel_x_ + screenshot_panel_w_ ||
+        y < screenshot_panel_y_ || y >= screenshot_panel_y_ + screenshot_panel_h_) {
+        SC_LOG("screenshot_handle_click: outside panel");
+        screenshot_panel_active_ = false;
+        render();
+        return true;
+    }
+
+    // Source grid hit test
+    int title_h = 40;
+    int grid_gap = 6;
+    int cell_w = (pw - grid_gap) / 2;
+    int cell_h = 34;
+    int grid_y = screenshot_panel_y_ + title_h + 12;
+    for (int i = 0; i < 4; i++) {
+        int gx = screenshot_panel_x_ + 12 + (i % 2) * (cell_w + grid_gap);
+        int gy = grid_y + (i / 2) * (cell_h + grid_gap);
+        hpv::sc::Source sv = (hpv::sc::Source)i;
+        if (x >= gx && x < gx + cell_w && y >= gy && y < gy + cell_h) {
+            SC_LOG("screenshot_handle_click: source grid idx=%d val=%d", i, (int)sv);
+            screenshot_source_ = sv;
+            screenshot_sel_output_ = -1;
+            screenshot_sel_window_ = -1;
+            screenshot_capture_all_ = false;
+            // Refresh window list if needed
+            if (sv == hpv::sc::Source::Window && screenshot_toplevel_avail_ &&
+                screenshot_windows_.empty()) {
+                refresh_screenshot_lists();
+            }
+            // Trigger capture immediately for non-window sources
+            if (sv != hpv::sc::Source::Window) {
+                screenshot_trigger_capture();
+            }
+            render();
+            return true;
+        }
+    }
+
+    int list_y = grid_y + 2 * (cell_h + grid_gap) + 12 + 14; // after "Outputs"/"Windows" label
+
+    // Output/window list hit test
+    int list_item_h = 32;
+    int max_items;
+
+    if (screenshot_source_ == hpv::sc::Source::Screen) {
+        max_items = std::min(32, (int)screenshot_outputs_.size() + 1);
+        for (int i = 0; i < max_items; i++) {
+            int iy = list_y + i * list_item_h;
+            if (x >= cx && x < cx + pw && y >= iy && y < iy + list_item_h) {
+                if (i == 0) {
+                    screenshot_capture_all_ = true;
+                    screenshot_sel_output_ = -1;
+                } else {
+                    screenshot_capture_all_ = false;
+                    screenshot_sel_output_ = i - 1;
+                }
+                SC_LOG("screenshot_handle_click: output list i=%d cap_all=%d", i, (int)screenshot_capture_all_);
+                screenshot_trigger_capture();
+                render();
+                return true;
+            }
+        }
+    } else if (screenshot_source_ == hpv::sc::Source::Window) {
+        max_items = std::min(32, (int)screenshot_windows_.size());
+        for (int i = 0; i < max_items; i++) {
+            int iy = list_y + i * list_item_h;
+            if (x >= cx && x < cx + pw && y >= iy && y < iy + list_item_h) {
+                screenshot_sel_window_ = i;
+                SC_LOG("screenshot_handle_click: window list i=%d", i);
+                screenshot_trigger_capture();
+                render();
+                return true;
+            }
+        }
+    }
+
+    // Export buttons hit test
+    int export_y = screenshot_panel_y_ + screenshot_panel_h_ - 52;
+    int btn_w = (pw - 8) / 3;
+    int btn_h = 36;
+    for (int i = 0; i < 3; i++) {
+        int bx = screenshot_panel_x_ + 12 + i * (btn_w + 4);
+        if (x >= bx && x < bx + btn_w && y >= export_y && y < export_y + btn_h) {
+            SC_LOG("screenshot_handle_click: export btn i=%d", i);
+            if (i == 0) {
+                // Save - open the result
+                if (!screenshot_last_path_.empty()) {
+                    screenshot_open_result(screenshot_last_path_);
+                }
+            } else if (i == 1) {
+                // Copy to clipboard
+                bool have_capture;
+                {
+                    std::lock_guard<std::mutex> lock(screenshot_captured_mutex_);
+                    have_capture = screenshot_captured_.valid;
+                }
+                if (have_capture) {
+                    ensure_screenshot_clipboard();
+                    if (screenshot_clipboard_.is_available()) {
+                        std::string png = render_current_image_to_png();
+                        if (!png.empty()) {
+                            screenshot_clipboard_.copy_data("image/png", std::move(png));
+                        }
+                    }
+                }
+            } else if (i == 2) {
+                // Save As
+                if (!screenshot_last_path_.empty()) {
+                    screenshot_open_result(screenshot_last_path_);
+                }
+            }
+            render();
+            return true;
+        }
+    }
+
+    return true; // consumed by panel
+}
+
+bool App::screenshot_handle_motion(int x, int y) {
+    if (!screenshot_panel_active_) return false;
+
+    // Reset hover state
+    screenshot_hovered_item_ = -1;
+    screenshot_hovered_area_ = 0;
+
+    int cx = screenshot_panel_x_ + 12;
+    int pw = screenshot_panel_w_ - 24;
+
+    // If outside panel, just update cursor tracking
+    if (x < screenshot_panel_x_ || x >= screenshot_panel_x_ + screenshot_panel_w_ ||
+        y < screenshot_panel_y_ || y >= screenshot_panel_y_ + screenshot_panel_h_) {
+        return true;
+    }
+
+    int title_h = 40;
+    int grid_gap = 6;
+    int cell_w = (pw - grid_gap) / 2;
+    int cell_h = 34;
+    int grid_y = screenshot_panel_y_ + title_h + 12;
+
+    // Source grid hover
+    for (int i = 0; i < 4; i++) {
+        int gx = screenshot_panel_x_ + 12 + (i % 2) * (cell_w + grid_gap);
+        int gy = grid_y + (i / 2) * (cell_h + grid_gap);
+        if (x >= gx && x < gx + cell_w && y >= gy && y < gy + cell_h) {
+            screenshot_hovered_item_ = i;
+            screenshot_hovered_area_ = 0;
+            return true;
+        }
+    }
+
+    int list_y = grid_y + 2 * (cell_h + grid_gap) + 12 + 14;
+    int list_item_h = 32;
+
+    if (screenshot_source_ == hpv::sc::Source::Screen) {
+        int max_items = std::min(32, (int)screenshot_outputs_.size() + 1);
+        for (int i = 0; i < max_items; i++) {
+            int iy = list_y + i * list_item_h;
+            if (x >= cx && x < cx + pw && y >= iy && y < iy + list_item_h) {
+                screenshot_hovered_item_ = i;
+                screenshot_hovered_area_ = 1;
+                return true;
+            }
+        }
+    } else if (screenshot_source_ == hpv::sc::Source::Window) {
+        int max_items = std::min(32, (int)screenshot_windows_.size());
+        for (int i = 0; i < max_items; i++) {
+            int iy = list_y + i * list_item_h;
+            if (x >= cx && x < cx + pw && y >= iy && y < iy + list_item_h) {
+                screenshot_hovered_item_ = i;
+                screenshot_hovered_area_ = 1;
+                return true;
+            }
+        }
+    }
+
+    // Export buttons hover
+    int export_y = screenshot_panel_y_ + screenshot_panel_h_ - 52;
+    int btn_w = (pw - 8) / 3;
+    int btn_h = 36;
+    for (int i = 0; i < 3; i++) {
+        int bx = screenshot_panel_x_ + 12 + i * (btn_w + 4);
+        if (x >= bx && x < bx + btn_w && y >= export_y && y < export_y + btn_h) {
+            screenshot_hovered_item_ = i;
+            screenshot_hovered_area_ = 2;
+            return true;
+        }
+    }
+
+    return true;
 }
 
 }

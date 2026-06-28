@@ -152,6 +152,9 @@ void App::commit_markup() {
 void App::cancel_markup() {
     markup_active_ = false;
     markup_current_.reset();
+    markup_elements_.clear();
+    markup_redo_stack_.clear();
+    image_modified_ = false;
     render();
 }
 

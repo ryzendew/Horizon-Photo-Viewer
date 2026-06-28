@@ -28,10 +28,18 @@ inline constexpr int kIconCodepoints[] = {
     0xE419, // rotate_right     → RotR (mirrored from same glyph as RotL)
     0xE419, // rotate_left      → RotL
     0xE5C8, // flip             → Flip
+    0,      // screen (SVG)
+    0,      // window (SVG)
+    0,      // focused (SVG)
+    0,      // selection (SVG)
+    0,      // copy (SVG)
+    0,      // panel (SVG)
+    0,      // upload (SVG)
 };
 inline constexpr const char* kIconLabels[] = {
     "Open", "<", ">", "+", "-", "Fit", "Full", "Play", "Gear", "Info", "Crop", "Menu", "Draw",
     "RotR", "RotL", "Flip",
+    "Screen", "Window", "Focused", "Selection", "Copy", "Panel", "Upload",
 };
 inline constexpr int8_t kToolbarLayout[] = {
     0,      // folder (Open)
@@ -52,12 +60,25 @@ inline constexpr int8_t kToolbarLayout[] = {
     13,     // rotate_cw
     14,     // rotate_ccw
     15,     // flip
+    -1,     // spacer
+    16,     // screen capture
+    17,     // window capture
+    18,     // focused capture
+    19,     // selection capture
 };
 inline constexpr int kNumToolbarItems = sizeof(kToolbarLayout) / sizeof(kToolbarLayout[0]);
 inline constexpr int kSettingsIconIdx = 8;
 inline constexpr int kMetadataIconIdx = 9;
 inline constexpr int kMenuIconIdx = 11;
 inline constexpr int kIconSize = 96;
+inline constexpr int kNumIcons = 23;
+inline constexpr int kScreenIconIdx = 16;
+inline constexpr int kWindowIconIdx = 17;
+inline constexpr int kFocusedIconIdx = 18;
+inline constexpr int kSelectionIconIdx = 19;
+inline constexpr int kCopyIconIdx = 20;
+inline constexpr int kPanelIconIdx = 21;
+inline constexpr int kUploadIconIdx = 22;
 
 namespace hpv {
 
@@ -91,6 +112,7 @@ struct OverlayState {
 struct OverlayButton {
     int x = 0, y = 0, w = 0, h = 0;
     std::string label;
+    std::string tooltip;
     std::function<void()> action;
 };
 
@@ -122,6 +144,11 @@ public:
 
     bool init_icons(const char* font_path, const char* crop_svg_path,
                     const char* flip_svg_path);
+    bool init_screenshot_icons(const char* screen_svg, const char* window_svg,
+                                const char* focused_svg, const char* selection_svg,
+                                const char* copy_svg);
+    bool init_panel_icon(const char* panel_svg);
+    bool init_upload_icon(const char* upload_svg);
     void destroy_icons();
     bool crop_icon_loaded() const {
         return kNumIcons > 10 && icon_surfaces_.size() > 10 && icon_surfaces_[10] != nullptr;
@@ -129,7 +156,7 @@ public:
 
     static constexpr int kToolbarHeight = 48;
     static constexpr int kToolbarHoverZone = 64;
-    static constexpr int kNumIcons = 16;
+    static constexpr int kNumIcons = 23;
 
 private:
     void render_placeholder(cairo_t* cr, int win_w, int win_h);

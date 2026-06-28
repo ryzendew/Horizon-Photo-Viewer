@@ -175,6 +175,82 @@ bool Overlay::init_icons(const char* font_path, const char* crop_svg_path,
     return !icon_surfaces_.empty();
 }
 
+bool Overlay::init_screenshot_icons(const char* screen_svg, const char* window_svg,
+                                     const char* focused_svg, const char* selection_svg,
+                                     const char* copy_svg) {
+    // Ensure vector is sized for all kNumIcons
+    if (icon_surfaces_.size() < static_cast<size_t>(kNumIcons)) {
+        icon_surfaces_.resize(kNumIcons, nullptr);
+    }
+
+    // Indices 16-20: Screen, Window, Focused, Selection, Copy
+    const char* paths[] = { screen_svg, window_svg, focused_svg, selection_svg, copy_svg };
+    for (int i = 0; i < 5; i++) {
+        int idx = kScreenIconIdx + i;
+        if (icon_surfaces_[idx]) {
+            cairo_surface_destroy(icon_surfaces_[idx]);
+            icon_surfaces_[idx] = nullptr;
+        }
+        if (paths[i]) {
+            ready_icon_from_svg(paths[i], kIconSize);
+            if (!icon_surfaces_.empty()) {
+                icon_surfaces_[idx] = icon_surfaces_.back();
+                icon_surfaces_.pop_back();
+            }
+        }
+    }
+
+    for (int i = 0; i < 5; i++) {
+        if (!icon_surfaces_[kScreenIconIdx + i])
+            return false;
+    }
+    return true;
+}
+
+bool Overlay::init_panel_icon(const char* panel_svg) {
+    if (icon_surfaces_.size() < static_cast<size_t>(kNumIcons)) {
+        icon_surfaces_.resize(kNumIcons, nullptr);
+    }
+    if (kPanelIconIdx >= (int)icon_surfaces_.size()) {
+        icon_surfaces_.resize(kPanelIconIdx + 1, nullptr);
+    }
+    if (icon_surfaces_[kPanelIconIdx]) {
+        cairo_surface_destroy(icon_surfaces_[kPanelIconIdx]);
+        icon_surfaces_[kPanelIconIdx] = nullptr;
+    }
+    if (panel_svg) {
+        ready_icon_from_svg(panel_svg, kIconSize);
+        if (!icon_surfaces_.empty()) {
+            icon_surfaces_[kPanelIconIdx] = icon_surfaces_.back();
+            icon_surfaces_.pop_back();
+        }
+        return icon_surfaces_[kPanelIconIdx] != nullptr;
+    }
+    return false;
+}
+
+bool Overlay::init_upload_icon(const char* upload_svg) {
+    if (icon_surfaces_.size() < static_cast<size_t>(kNumIcons)) {
+        icon_surfaces_.resize(kNumIcons, nullptr);
+    }
+    if (kUploadIconIdx >= (int)icon_surfaces_.size()) {
+        icon_surfaces_.resize(kUploadIconIdx + 1, nullptr);
+    }
+    if (icon_surfaces_[kUploadIconIdx]) {
+        cairo_surface_destroy(icon_surfaces_[kUploadIconIdx]);
+        icon_surfaces_[kUploadIconIdx] = nullptr;
+    }
+    if (upload_svg) {
+        ready_icon_from_svg(upload_svg, kIconSize);
+        if (!icon_surfaces_.empty()) {
+            icon_surfaces_[kUploadIconIdx] = icon_surfaces_.back();
+            icon_surfaces_.pop_back();
+        }
+        return icon_surfaces_[kUploadIconIdx] != nullptr;
+    }
+    return false;
+}
+
 void Overlay::destroy_icons() {
     for (auto* surf : icon_surfaces_) {
         if (surf) cairo_surface_destroy(surf);

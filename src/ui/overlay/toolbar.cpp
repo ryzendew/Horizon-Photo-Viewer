@@ -79,24 +79,36 @@ void Overlay::render_toolbar(cairo_t* cr, int win_w, int win_h,
             continue;
         }
         draw_button(x, btn_y, btn_size, idx, btn_idx);
-        buttons.push_back({x, btn_y, btn_size, btn_size, kIconLabels[idx], {}});
+        buttons.push_back({x, btn_y, btn_size, btn_size, kIconLabels[idx], {}, {}});
         x += btn_size + item_gap;
         btn_idx++;
     }
 
-    // Right-justified: Menu, Settings, Info (right to left)
+    // Right-justified: Copy, Panel, Menu, Settings, Info (right to left)
     int rj_x = win_w - 4;
     rj_x -= btn_size; // Settings is rightmost
     draw_button(rj_x, btn_y, btn_size, kSettingsIconIdx, btn_idx);
-    buttons.push_back({rj_x, btn_y, btn_size, btn_size, kIconLabels[kSettingsIconIdx], {}});
+    buttons.push_back({rj_x, btn_y, btn_size, btn_size, kIconLabels[kSettingsIconIdx], {}, {}});
     btn_idx++;
     rj_x -= btn_size + 4;
     draw_button(rj_x, btn_y, btn_size, kMetadataIconIdx, btn_idx);
-    buttons.push_back({rj_x, btn_y, btn_size, btn_size, kIconLabels[kMetadataIconIdx], {}});
+    buttons.push_back({rj_x, btn_y, btn_size, btn_size, kIconLabels[kMetadataIconIdx], {}, {}});
     btn_idx++;
     rj_x -= btn_size + 4;
     draw_button(rj_x, btn_y, btn_size, kMenuIconIdx, btn_idx);
-    buttons.push_back({rj_x, btn_y, btn_size, btn_size, kIconLabels[kMenuIconIdx], {}});
+    buttons.push_back({rj_x, btn_y, btn_size, btn_size, kIconLabels[kMenuIconIdx], {}, {}});
+    btn_idx++;
+    rj_x -= btn_size + 4;
+    draw_button(rj_x, btn_y, btn_size, kPanelIconIdx, btn_idx);
+    buttons.push_back({rj_x, btn_y, btn_size, btn_size, kIconLabels[kPanelIconIdx], {}, {}});
+    btn_idx++;
+    rj_x -= btn_size + 4;
+    draw_button(rj_x, btn_y, btn_size, kUploadIconIdx, btn_idx);
+    buttons.push_back({rj_x, btn_y, btn_size, btn_size, kIconLabels[kUploadIconIdx], {}, {}});
+    btn_idx++;
+    rj_x -= btn_size + 4;
+    draw_button(rj_x, btn_y, btn_size, kCopyIconIdx, btn_idx);
+    buttons.push_back({rj_x, btn_y, btn_size, btn_size, kIconLabels[kCopyIconIdx], {}, {}});
 }
 
 } // namespace hpv

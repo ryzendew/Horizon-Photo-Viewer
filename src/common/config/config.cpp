@@ -67,6 +67,7 @@ Config Config::load() {
             out << "default_zoom = " << c.default_zoom << "\n";
             out << "bg_alpha = " << c.bg_alpha << "\n";
             out << "theme = \"" << c.theme << "\"\n";
+            out << "imgur_client_id = \"" << c.imgur_client_id << "\"\n";
         }
         std::cout << "config: created default at " << path << "\n";
         return c;
@@ -107,6 +108,8 @@ Config Config::load() {
                 c.bg_alpha = std::max(0.0f, std::min(1.0f, v));
         } else if (key == "theme") {
             c.theme = unquote(val);
+        } else if (key == "imgur_client_id") {
+            c.imgur_client_id = unquote(val);
         }
     }
 
@@ -130,6 +133,9 @@ bool Config::save(const Config& c) {
     out << "default_zoom = " << c.default_zoom << "\n";
     out << "bg_alpha = " << c.bg_alpha << "\n";
     out << "theme = \"" << c.theme << "\"\n";
+    if (!c.imgur_client_id.empty()) {
+        out << "imgur_client_id = \"" << c.imgur_client_id << "\"\n";
+    }
     return true;
 }
 

@@ -16,9 +16,23 @@ void App::open_file_dialog() {
     uint32_t surface_id = wl_proxy_get_id((struct wl_proxy*)surface_);
     parent_handle += std::to_string(surface_id);
 
+    std::vector<std::string> image_mime_types = {
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/bmp",
+        "image/webp",
+        "image/tiff",
+        "image/heic",
+        "image/heif",
+        "image/avif",
+        "image/jxl",
+        "image/svg+xml",
+    };
+
     portal_dialog_.open_file(parent_handle, [this](const std::string& path) {
         on_file_dialog_result(path);
-    });
+    }, image_mime_types);
 }
 
 void App::on_file_dialog_result(const std::string& path) {

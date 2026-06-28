@@ -50,7 +50,7 @@ void Overlay::render_sidebar(cairo_t* cr, int win_w, int win_h,
     cairo_move_to(cr, c_cx + cm, c_cy - cm);
     cairo_line_to(cr, c_cx - cm, c_cy + cm);
     cairo_stroke(cr);
-    buttons.push_back({cb_x, cb_y, cb_size, cb_size, "CloseSidebar", {}});
+    buttons.push_back({cb_x, cb_y, cb_size, cb_size, "CloseSidebar", {}, {}});
 
     // Divider
     int div_y = top_off + header_h;

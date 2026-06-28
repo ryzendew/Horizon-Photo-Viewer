@@ -21,6 +21,14 @@
 #include "linux-dmabuf-v1-client-protocol.h"
 #include "single-pixel-buffer-v1-client-protocol.h"
 #include "xdg-output-unstable-v1-client-protocol.h"
+#include "ext-data-control-v1-client-protocol.h"
+#include "ext-foreign-toplevel-list-v1-client-protocol.h"
+#include "ext-image-capture-source-v1-client-protocol.h"
+#include "ext-image-copy-capture-v1-client-protocol.h"
+#include "wlr-data-control-unstable-v1-client-protocol.h"
+#include "wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
+#include "wlr-layer-shell-unstable-v1-client-protocol.h"
+#include "wlr-screencopy-unstable-v1-client-protocol.h"
 
 namespace hpv {
 
@@ -56,6 +64,59 @@ constexpr wp_image_description_info_v1_listener cm_img_desc_info_listener_ = {
     .target_max_fall = [](void*, wp_image_description_info_v1*, uint32_t) {},
 };
 
+// xdg_output_v1 listener for output tracking
+void xdg_output_name_handler(void* data, zxdg_output_v1*, const char* name) {
+    auto* slot = static_cast<WaylandConnection::OutputSlot*>(data);
+    if (name) slot->name = name;
+}
+
+void xdg_output_logical_position_handler(void* data, zxdg_output_v1*, int32_t x, int32_t y) {
+    auto* slot = static_cast<WaylandConnection::OutputSlot*>(data);
+    slot->logical_x = x;
+    slot->logical_y = y;
+}
+
+void xdg_output_logical_size_handler(void* data, zxdg_output_v1*, int32_t w, int32_t h) {
+    auto* slot = static_cast<WaylandConnection::OutputSlot*>(data);
+    slot->logical_w = w;
+    slot->logical_h = h;
+}
+
+void xdg_output_done_handler(void* data, zxdg_output_v1*) {
+    auto* slot = static_cast<WaylandConnection::OutputSlot*>(data);
+    slot->ready = true;
+}
+
+constexpr zxdg_output_v1_listener xdg_output_listener_ = {
+    .logical_position = xdg_output_logical_position_handler,
+    .logical_size = xdg_output_logical_size_handler,
+    .done = xdg_output_done_handler,
+    .name = xdg_output_name_handler,
+    .description = [](void*, zxdg_output_v1*, const char*) {},
+};
+
+// wl_output listener (extended version for tracking)
+void output_geometry_handler(void*, wl_output*, int32_t, int32_t, int32_t, int32_t, int32_t, const char*, const char*, int32_t) {}
+void output_mode_handler(void*, wl_output*, uint32_t, int32_t, int32_t, int32_t) {}
+void output_done_handler(void* data, wl_output*) {
+    auto* slot = static_cast<WaylandConnection::OutputSlot*>(data);
+    slot->ready = true;
+}
+void output_scale_handler(void*, wl_output*, int32_t) {}
+void output_name_handler(void* data, wl_output*, const char* name) {
+    auto* slot = static_cast<WaylandConnection::OutputSlot*>(data);
+    if (name) slot->name = name;
+}
+
+constexpr wl_output_listener output_listener_ = {
+    .geometry = output_geometry_handler,
+    .mode = output_mode_handler,
+    .done = output_done_handler,
+    .scale = output_scale_handler,
+    .name = output_name_handler,
+    .description = [](void*, wl_output*, const char*) {},
+};
+
 } // end anonymous namespace
 
 void WaylandConnection::registry_global(void* data, wl_registry* registry, uint32_t name,
@@ -81,11 +142,6 @@ void WaylandConnection::registry_global(void* data, wl_registry* registry, uint3
             wl_registry_bind(registry, name, &xdg_wm_base_interface,
                              std::min(version, 5u)));
         xdg_wm_base_add_listener(self.xdg_base_, &xdg_wm_base_listener_, nullptr);
-    } else if (ifc == wl_output_interface.name) {
-        if (!self.output_) {
-            self.output_ = static_cast<wl_output*>(
-                wl_registry_bind(registry, name, &wl_output_interface, 1));
-        }
     } else if (ifc == wp_viewporter_interface.name) {
         self.viewporter_ = static_cast<wp_viewporter*>(
             wl_registry_bind(registry, name, &wp_viewporter_interface, 1));
@@ -131,6 +187,62 @@ void WaylandConnection::registry_global(void* data, wl_registry* registry, uint3
             wl_registry_bind(registry, name,
                 &wl_data_device_manager_interface,
                 std::min(version, 3u)));
+    // --- Screenshot protocol bindings ---
+    } else if (ifc == zwlr_layer_shell_v1_interface.name) {
+        self.layer_shell_ = static_cast<zwlr_layer_shell_v1*>(
+            wl_registry_bind(registry, name,
+                &zwlr_layer_shell_v1_interface,
+                std::min(version, 4u)));
+    } else if (ifc == zwlr_screencopy_manager_v1_interface.name) {
+        self.screencopy_mgr_ = static_cast<zwlr_screencopy_manager_v1*>(
+            wl_registry_bind(registry, name,
+                &zwlr_screencopy_manager_v1_interface,
+                std::min(version, 3u)));
+    } else if (ifc == ext_image_copy_capture_manager_v1_interface.name) {
+        self.ext_image_copy_capture_mgr_ = static_cast<ext_image_copy_capture_manager_v1*>(
+            wl_registry_bind(registry, name,
+                &ext_image_copy_capture_manager_v1_interface, 1));
+    } else if (ifc == ext_output_image_capture_source_manager_v1_interface.name) {
+        self.ext_output_image_capture_source_mgr_ = static_cast<ext_output_image_capture_source_manager_v1*>(
+            wl_registry_bind(registry, name,
+                &ext_output_image_capture_source_manager_v1_interface, 1));
+    } else if (ifc == ext_foreign_toplevel_image_capture_source_manager_v1_interface.name) {
+        self.ext_foreign_toplevel_image_capture_source_mgr_ =
+            static_cast<ext_foreign_toplevel_image_capture_source_manager_v1*>(
+                wl_registry_bind(registry, name,
+                    &ext_foreign_toplevel_image_capture_source_manager_v1_interface, 1));
+    } else if (ifc == ext_data_control_manager_v1_interface.name) {
+        self.ext_data_control_mgr_ = static_cast<ext_data_control_manager_v1*>(
+            wl_registry_bind(registry, name,
+                &ext_data_control_manager_v1_interface, 1));
+    } else if (ifc == zwlr_data_control_manager_v1_interface.name) {
+        self.wlr_data_control_mgr_ = static_cast<zwlr_data_control_manager_v1*>(
+            wl_registry_bind(registry, name,
+                &zwlr_data_control_manager_v1_interface,
+                std::min(version, 2u)));
+    } else if (ifc == ext_foreign_toplevel_list_v1_interface.name) {
+        self.ext_foreign_toplevel_list_ = static_cast<ext_foreign_toplevel_list_v1*>(
+            wl_registry_bind(registry, name,
+                &ext_foreign_toplevel_list_v1_interface, 1));
+        if (self.ext_foreign_toplevel_list_) {
+            self.extForeignToplevels_.bind(self.ext_foreign_toplevel_list_, self.display_);
+        }
+    } else if (ifc == zwlr_foreign_toplevel_manager_v1_interface.name) {
+        self.wlr_foreign_toplevel_mgr_ = static_cast<zwlr_foreign_toplevel_manager_v1*>(
+            wl_registry_bind(registry, name,
+                &zwlr_foreign_toplevel_manager_v1_interface,
+                std::min(version, 3u)));
+        if (self.wlr_foreign_toplevel_mgr_) {
+            self.wlrForeignToplevels_.bind(self.wlr_foreign_toplevel_mgr_, self.display_);
+        }
+    } else if (ifc == wl_output_interface.name) {
+        auto slot = std::make_unique<WaylandConnection::OutputSlot>();
+        slot->output = static_cast<wl_output*>(
+            wl_registry_bind(registry, name, &wl_output_interface,
+                             std::min(version, 4u)));
+        wl_output_add_listener(slot->output, &output_listener_, slot.get());
+        if (!self.output_) self.output_ = slot->output;
+        self.tracked_outputs_.push_back(std::move(slot));
     }
 }
 
@@ -158,6 +270,14 @@ bool WaylandConnection::connect() {
         std::cerr << "Missing required Wayland globals\n";
         return false;
     }
+
+    // Set output_ from first tracked output
+    if (!tracked_outputs_.empty()) {
+        output_ = tracked_outputs_[0]->output;
+    }
+
+    // Bind xdg_output for each tracked output
+    bind_xdg_for_tracked_();
 
     // Fetch display ICC profile from color management protocol
     fetch_display_icc_profile();
@@ -222,7 +342,61 @@ void WaylandConnection::cm_output_info_done(void* data, wp_image_description_inf
     self->cm_icc_ready_ = true;
 }
 
+void WaylandConnection::bind_xdg_for_tracked_() {
+    if (!xdg_output_mgr_) return;
+    for (auto& slot : tracked_outputs_) {
+        if (slot->output && !slot->xdg) {
+            slot->xdg = zxdg_output_manager_v1_get_xdg_output(xdg_output_mgr_, slot->output);
+            if (slot->xdg) {
+                zxdg_output_v1_add_listener(slot->xdg, &xdg_output_listener_, slot.get());
+            }
+        }
+    }
+}
+
+void WaylandConnection::refresh_logical_outputs() {
+    bind_xdg_for_tracked_();
+    if (display_) {
+        wl_display_roundtrip(display_);
+        wl_display_roundtrip(display_);
+    }
+}
+
+std::vector<LogicalOutputBounds> WaylandConnection::logical_output_bounds() const {
+    std::vector<LogicalOutputBounds> result;
+    for (const auto& slot : tracked_outputs_) {
+        if (!slot->ready || !slot->output) continue;
+        LogicalOutputBounds b;
+        b.output = slot->output;
+        b.name = slot->name;
+        b.global_x = slot->logical_x;
+        b.global_y = slot->logical_y;
+        b.width = slot->logical_w;
+        b.height = slot->logical_h;
+        result.push_back(std::move(b));
+    }
+    return result;
+}
+
 void WaylandConnection::disconnect() {
+    // Clean up persistent toplevel tracking (shutdown destroys the protocol objects)
+    extForeignToplevels_.shutdown();
+    wlrForeignToplevels_.shutdown();
+    ext_foreign_toplevel_list_ = nullptr;
+    wlr_foreign_toplevel_mgr_ = nullptr;
+
+    // Clean up tracked outputs
+    for (auto& slot : tracked_outputs_) {
+        if (slot->xdg) zxdg_output_v1_destroy(slot->xdg);
+    }
+    tracked_outputs_.clear();
+    if (wlr_data_control_mgr_) zwlr_data_control_manager_v1_destroy(wlr_data_control_mgr_);
+    if (ext_data_control_mgr_) ext_data_control_manager_v1_destroy(ext_data_control_mgr_);
+    if (ext_foreign_toplevel_image_capture_source_mgr_) ext_foreign_toplevel_image_capture_source_manager_v1_destroy(ext_foreign_toplevel_image_capture_source_mgr_);
+    if (ext_output_image_capture_source_mgr_) ext_output_image_capture_source_manager_v1_destroy(ext_output_image_capture_source_mgr_);
+    if (ext_image_copy_capture_mgr_) ext_image_copy_capture_manager_v1_destroy(ext_image_copy_capture_mgr_);
+    if (screencopy_mgr_) zwlr_screencopy_manager_v1_destroy(screencopy_mgr_);
+    if (layer_shell_) zwlr_layer_shell_v1_destroy(layer_shell_);
     if (xdg_output_mgr_) zxdg_output_manager_v1_destroy(xdg_output_mgr_);
     if (single_pixel_buffer_mgr_) wp_single_pixel_buffer_manager_v1_destroy(single_pixel_buffer_mgr_);
     if (linux_dmabuf_) zwp_linux_dmabuf_v1_destroy(linux_dmabuf_);
@@ -244,6 +418,35 @@ void WaylandConnection::disconnect() {
         wl_display_disconnect(display_);
         display_ = nullptr;
     }
+
+    // Null all remaining pointers to make disconnect() idempotent
+    wlr_foreign_toplevel_mgr_ = nullptr;
+    ext_foreign_toplevel_list_ = nullptr;
+    wlr_data_control_mgr_ = nullptr;
+    ext_data_control_mgr_ = nullptr;
+    ext_foreign_toplevel_image_capture_source_mgr_ = nullptr;
+    ext_output_image_capture_source_mgr_ = nullptr;
+    ext_image_copy_capture_mgr_ = nullptr;
+    screencopy_mgr_ = nullptr;
+    layer_shell_ = nullptr;
+    xdg_output_mgr_ = nullptr;
+    single_pixel_buffer_mgr_ = nullptr;
+    linux_dmabuf_ = nullptr;
+    keyboard_shortcuts_inhibit_mgr_ = nullptr;
+    idle_inhibit_mgr_ = nullptr;
+    cm_img_desc_ = nullptr;
+    cm_output_ = nullptr;
+    color_mgr_ = nullptr;
+    tearing_control_mgr_ = nullptr;
+    fractional_scale_mgr_ = nullptr;
+    viewporter_ = nullptr;
+    data_device_mgr_ = nullptr;
+    xdg_base_ = nullptr;
+    seat_ = nullptr;
+    output_ = nullptr;
+    shm_ = nullptr;
+    compositor_ = nullptr;
+    registry_ = nullptr;
 }
 
 WaylandConnection::~WaylandConnection() {

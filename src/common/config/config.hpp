@@ -15,6 +15,8 @@ struct Config {
     float default_zoom = 1.0f;
     float bg_alpha = 1.0f;
     std::string theme = "dark";
+    static constexpr auto kDefaultImgurClientId = "a0691805609650e";
+    std::string imgur_client_id = kDefaultImgurClientId;
 };
 
 }
