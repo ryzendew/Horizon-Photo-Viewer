@@ -1452,7 +1452,7 @@ static int stbi_write_jpg_core(stbi__write_context *s, int width, int height, in
    int ofsG = comp > 2 ? 1 : 0, ofsB = comp > 2 ? 2 : 0;
    const unsigned char *dataR = (const unsigned char *) data;
     int x = 0, y = 0, pos = 0;
-    if(y <= 0 || x <= 0) return 0;
+    if(height <= 0 || width <= 0) return 0;
    const float YQt[] = {16,11,10,16,24,40,51,61,12,12,14,19,26,58,60,55,14,13,16,24,40,57,69,56,14,17,22,29,51,87,80,62,18,22,37,56,68,109,103,77,24,35,55,64,81,104,113,92,49,64,78,87,103,121,120,101,72,92,95,98,112,100,103,99};
    const float UVQt[] = {17,18,24,47,99,99,99,99,18,21,26,66,99,99,99,99,24,26,56,99,99,99,99,99,47,66,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99,99};
    float YQT_scaled[64], UVQT_scaled[64];
@@ -1522,14 +1522,14 @@ static int stbi_write_jpg_core(stbi__write_context *s, int width, int height, in
    // DHT
    for(x = 0; x < 4; ++x) {
       int dc = x < 2;  // first two are DC, last two are AC
-      int ofs = (dc ? 0 : 16);
-      int count = dc ? 12 : 162;
-      int i, j;
-      stbiw__putc(s, 0xFF);
-      stbiw__putc(s, 0xC4);
-      stbiw__putc(s, 0);
-      stbiw__putc(s, (unsigned char)(3 + count));
-      stbiw__putc(s, (unsigned char)(x*16 + ofs));
+       int ofs = 0;
+       int count = dc ? 12 : 162;
+       int i, j;
+       stbiw__putc(s, 0xFF);
+       stbiw__putc(s, 0xC4);
+       stbiw__putc(s, 0);
+       stbiw__putc(s, (unsigned char)(19 + count));
+       stbiw__putc(s, (unsigned char)((x/2)*16 + (x%2)));
       for(i = 0; i < 16; ++i) {
          int n = dc ? std_dc_luminance_nrcodes[i+1] : (x-2 ? std_ac_chrominance_nrcodes[i+1] : std_ac_luminance_nrcodes[i+1]);
          for(j = 0; j < n; ++j) {

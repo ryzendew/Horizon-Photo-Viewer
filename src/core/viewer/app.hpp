@@ -20,6 +20,9 @@
 #include "core/screenshot/icon_cache.hpp"
 
 #include <cairo.h>
+#ifdef HAVE_LIBCURL
+#include "features/upload/upload.hpp"
+#endif
 #include <functional>
 #include <atomic>
 #include <mutex>
@@ -130,6 +133,10 @@ public:
     void toggle_color_management();
     void set_default_zoom(float z);
     void toggle_theme();
+    void toggle_imgur_direct_link();
+    void toggle_imgur_open_browser();
+    void toggle_imgur_auto_copy();
+    void set_active_settings_tab(int tab);
     void save_image();
     void save_as();
     void save_as_copy();
@@ -221,10 +228,35 @@ private:
     int upload_menu_x_ = 0, upload_menu_y_ = 0;
     int upload_menu_w_ = 0, upload_menu_h_ = 0;
 
+    // Open submenu (Open New / Open Recent)
+    bool show_open_menu_ = false;
+    int open_menu_hover_ = -1;
+    int open_menu_x_ = 0, open_menu_y_ = 0;
+    int open_menu_w_ = 0, open_menu_h_ = 0;
+
+    // Open Recent sub-submenu
+    bool show_open_recent_menu_ = false;
+    int open_recent_menu_hover_ = -1;
+    int open_recent_menu_x_ = 0, open_recent_menu_y_ = 0;
+    int open_recent_menu_w_ = 0, open_recent_menu_h_ = 0;
+
     // Upload setup dialog
     bool show_upload_setup_ = false;
     std::string upload_setup_input_;
     int upload_setup_hover_btn_ = -1; // -1 = none, 0 = cancel, 1 = save
+
+#ifdef HAVE_LIBCURL
+    struct UploadState {
+        std::atomic<float> progress{-1.0f};
+        ImgurUploadResult result;
+    };
+    std::shared_ptr<UploadState> upload_state_;
+    std::thread upload_thread_;
+#endif
+
+    // Toast notification
+    std::string toast_message_;
+    uint64_t toast_start_ms_ = 0;
 
     // Crop state
     bool crop_active_ = false;
@@ -275,7 +307,6 @@ private:
     std::string current_dir_;
     std::vector<std::string> dir_images_;
     int dir_image_index_ = -1;
-    DecodedImage current_image_;
     DecodedImage decoded_image_;
     float zoom_ = 1.0f;
     float pan_x_ = 0.0f;
@@ -287,9 +318,6 @@ private:
 
     // Background prefetch
     DecodePool decode_pool_;
-
-    // Cached BGRA pixels (rebuilt only when decoded_image_ changes)
-    std::vector<uint8_t> bgra_cache_;
 
     // SVG source data and cached parse for vector rendering
     std::vector<uint8_t> svg_source_data_;
@@ -375,7 +403,11 @@ private:
     M3Slider ss_interval_slider_;
     M3Toggle theme_toggle_;
     M3Toggle color_mgmt_toggle_;
+    M3Toggle imgur_direct_toggle_;
+    M3Toggle imgur_open_browser_toggle_;
+    M3Toggle imgur_auto_copy_toggle_;
     M3Slider* active_slider_ = nullptr;
+    int active_settings_tab_ = 0;
 
     // Thumbnail strip
     ThumbnailStrip thumbnail_strip_;

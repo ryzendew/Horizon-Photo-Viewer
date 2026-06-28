@@ -105,6 +105,7 @@ struct OverlayState {
     bool enable_color_management = true;
     float default_zoom = 1.0f;
     std::string theme = "dark";
+    std::string imgur_client_id;
 
     ExifInfo exif;
 };
@@ -126,12 +127,16 @@ public:
                         int hovered_idx = -1, int pressed_idx = -1,
                         float bg_alpha = 1.0f);
     void render_settings_popup(cairo_t* cr, int win_w, int win_h,
-                               OverlayState& state, std::vector<OverlayButton>& buttons,
-                               M3Slider& bg_alpha_slider,
-                               M3Slider& default_zoom_slider,
-                               M3Slider& ss_interval_slider,
-                               M3Toggle& theme_toggle,
-                               M3Toggle& color_mgmt_toggle);
+                                OverlayState& state, std::vector<OverlayButton>& buttons,
+                                M3Slider& bg_alpha_slider,
+                                M3Slider& default_zoom_slider,
+                                M3Slider& ss_interval_slider,
+                                M3Toggle& theme_toggle,
+                                M3Toggle& color_mgmt_toggle,
+                                M3Toggle& imgur_direct_toggle,
+                                M3Toggle& imgur_open_browser_toggle,
+                                M3Toggle& imgur_auto_copy_toggle,
+                                int active_settings_tab);
     void render_sidebar(cairo_t* cr, int win_w, int win_h,
                         const OverlayState& state, std::vector<OverlayButton>& buttons);
     void render_crop_overlay(cairo_t* cr, int win_w, int win_h,

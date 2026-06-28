@@ -2,7 +2,6 @@
 
 #include <curl/curl.h>
 #include <cstring>
-#include <sstream>
 #include <vector>
 
 namespace hpv {
@@ -49,20 +48,102 @@ static size_t curl_write_callback(void* contents, size_t size, size_t nmemb, voi
     return total;
 }
 
-bool upload_to_imgur(const std::string& png_data, const std::string& client_id,
-                     std::string& out_url, std::string& out_error) {
-    out_url.clear();
-    out_error.clear();
+// Extract a JSON string value by key, searching at any nesting level.
+// Handles escaped characters. Returns empty string if key not found or not a string.
+static std::string json_extract_string(const std::string& json, const std::string& key) {
+    std::string search = "\"" + key + "\":";
+    auto pos = json.find(search);
+    if (pos == std::string::npos) return {};
+    pos += search.size();
+    // Skip whitespace
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t' ||
+                                 json[pos] == '\n' || json[pos] == '\r'))
+        pos++;
+    if (pos >= json.size() || json[pos] != '"') return {};
+    pos++; // skip opening quote
+    std::string result;
+    while (pos < json.size()) {
+        if (json[pos] == '\\') {
+            pos++;
+            if (pos < json.size()) {
+                result += json[pos];
+                pos++;
+            }
+        } else if (json[pos] == '"') {
+            break;
+        } else {
+            result += json[pos];
+            pos++;
+        }
+    }
+    return result;
+}
+
+// Extract true/false boolean value by key
+static bool json_extract_bool(const std::string& json, const std::string& key, bool def) {
+    std::string search = "\"" + key + "\":";
+    auto pos = json.find(search);
+    if (pos == std::string::npos) return def;
+    pos += search.size();
+    while (pos < json.size() && (json[pos] == ' ' || json[pos] == '\t'))
+        pos++;
+    if (json.substr(pos, 4) == "true") return true;
+    if (json.substr(pos, 5) == "false") return false;
+    return def;
+}
+
+// Extract error message from Imgur error response:
+// {"data":{"error":"msg",...},"success":false,"status":400}
+// The error field can be a string or an object: {"error":{"message":"msg",...}}
+// Also handles HTML error pages (<title>...</title>)
+static std::string parse_imgur_error(const std::string& body) {
+    // Try JSON first
+    std::string msg = json_extract_string(body, "message");
+    if (!msg.empty()) return msg;
+    msg = json_extract_string(body, "error");
+    if (!msg.empty()) return msg;
+
+    // Fallback: extract <title> from HTML error pages
+    auto title_start = body.find("<title>");
+    if (title_start != std::string::npos) {
+        title_start += 7;
+        auto title_end = body.find("</title>", title_start);
+        if (title_end != std::string::npos) {
+            return body.substr(title_start, title_end - title_start);
+        }
+    }
+
+    return "Unknown error";
+}
+
+ImgurUploadResult upload_to_imgur(const std::string& image_data,
+                                  const std::string& client_id,
+                                  std::atomic<float>* progress) {
+    ImgurUploadResult result;
+
+    // Progress callback — writes 0.0–1.0 to *progress at each transfer step
+    // Must use explicit function pointer: curl_easy_setopt is variadic, so implicit
+    // stateless-lambda-to-function-pointer conversion does NOT happen for its args.
+    int (*xferinfo)(void*, curl_off_t, curl_off_t, curl_off_t, curl_off_t) =
+        [](void* clientp, curl_off_t, curl_off_t,
+           curl_off_t ultotal, curl_off_t ulnow) -> int {
+            auto* p = static_cast<std::atomic<float>*>(clientp);
+            if (ultotal > 0) {
+                p->store((float)((double)ulnow / (double)ultotal), std::memory_order_relaxed);
+            }
+            return 0;
+        };
 
     CURL* curl = curl_easy_init();
     if (!curl) {
-        out_error = "Failed to initialize curl";
-        return false;
+        result.error = "Failed to initialize curl";
+        return result;
     }
 
-    std::string b64 = base64_encode(png_data);
-
-    std::string post_data = "image=" + b64 + "&type=base64";
+    std::string b64 = base64_encode(image_data);
+    char* enc = curl_easy_escape(curl, b64.c_str(), (int)b64.size());
+    std::string post_data = std::string("image=") + enc + "&type=base64";
+    curl_free(enc);
 
     struct curl_slist* headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/x-www-form-urlencoded");
@@ -76,51 +157,56 @@ bool upload_to_imgur(const std::string& png_data, const std::string& client_id,
     curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, (long)post_data.size());
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, curl_write_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    // no timeout — uploads can take a while
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "Horizon-Photo/1.0");
 
+    if (progress) {
+        curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+        curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, xferinfo);
+        curl_easy_setopt(curl, CURLOPT_XFERINFODATA, progress);
+    }
+
     CURLcode res = curl_easy_perform(curl);
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &result.http_status);
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
 
     if (res != CURLE_OK) {
-        out_error = curl_easy_strerror(res);
-        return false;
+        result.error = curl_easy_strerror(res);
+        return result;
     }
 
-    if (http_code != 200) {
-        out_error = "HTTP " + std::to_string(http_code) + ": " + response.data;
-        return false;
+    if (result.http_status != 200) {
+        std::string api_error = parse_imgur_error(response.data);
+        result.error = "HTTP " + std::to_string(result.http_status) + ": " + api_error;
+        return result;
     }
 
-    // Parse JSON response for "data":{"link":"..."}
-    auto link_pos = response.data.find("\"link\":\"");
-    if (link_pos == std::string::npos) {
-        out_error = "No link in response";
-        return false;
-    }
-    link_pos += 8; // past "link":" 
-    auto end_pos = response.data.find('"', link_pos);
-    if (end_pos == std::string::npos) {
-        out_error = "Malformed link field";
-        return false;
+    // Extract fields from JSON response
+    bool success = json_extract_bool(response.data, "success", false);
+    if (!success) {
+        result.error = parse_imgur_error(response.data);
+        return result;
     }
 
-    // Unescape any JSON escapes
-    std::string raw = response.data.substr(link_pos, end_pos - link_pos);
-    for (size_t i = 0; i < raw.size(); i++) {
-        if (raw[i] == '\\' && i + 1 < raw.size()) {
-            char c = raw[i + 1];
-            if (c == '/' || c == '\\' || c == '"') {
-                raw.erase(i, 1);
-            }
-            i++;
-        }
+    result.image_id = json_extract_string(response.data, "id");
+    result.deletehash = json_extract_string(response.data, "deletehash");
+    std::string link = json_extract_string(response.data, "link");
+
+    if (link.empty()) {
+        result.error = "No link in response";
+        return result;
     }
-    out_url = raw;
-    return true;
+
+    // Strip trailing '.' that Imgur sometimes appends
+    if (!link.empty() && link.back() == '.')
+        link.pop_back();
+
+    result.url = link;
+    result.page_url = "https://imgur.com/" + result.image_id;
+    result.thumbnail_url = "https://i.imgur.com/" + result.image_id + "m.jpg"; // medium 320x320
+    result.success = true;
+    return result;
 }
 
 }

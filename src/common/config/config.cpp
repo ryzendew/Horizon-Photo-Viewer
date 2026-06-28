@@ -68,6 +68,10 @@ Config Config::load() {
             out << "bg_alpha = " << c.bg_alpha << "\n";
             out << "theme = \"" << c.theme << "\"\n";
             out << "imgur_client_id = \"" << c.imgur_client_id << "\"\n";
+            out << "imgur_direct_link = " << (c.imgur_direct_link ? "true" : "false") << "\n";
+            out << "imgur_open_browser = " << (c.imgur_open_browser ? "true" : "false") << "\n";
+            out << "imgur_auto_copy = " << (c.imgur_auto_copy ? "true" : "false") << "\n";
+            out << "recent_files = []\n";
         }
         std::cout << "config: created default at " << path << "\n";
         return c;
@@ -110,6 +114,25 @@ Config Config::load() {
             c.theme = unquote(val);
         } else if (key == "imgur_client_id") {
             c.imgur_client_id = unquote(val);
+        } else if (key == "imgur_direct_link") {
+            c.imgur_direct_link = (val == "true");
+        } else if (key == "imgur_open_browser") {
+            c.imgur_open_browser = (val == "true");
+        } else if (key == "imgur_auto_copy") {
+            c.imgur_auto_copy = (val == "true");
+        } else if (key == "recent_files") {
+            // Parse TOML array: ["path1","path2",...]
+            if (val.size() >= 2 && val.front() == '[' && val.back() == ']') {
+                std::string inner = val.substr(1, val.size() - 2);
+                size_t pos = 0;
+                while ((pos = inner.find_first_of('"', pos)) != std::string::npos) {
+                    size_t end = inner.find_first_of('"', pos + 1);
+                    if (end == std::string::npos) break;
+                    std::string p = inner.substr(pos + 1, end - pos - 1);
+                    if (!p.empty()) c.recent_files.push_back(p);
+                    pos = end + 1;
+                }
+            }
         }
     }
 
@@ -136,6 +159,15 @@ bool Config::save(const Config& c) {
     if (!c.imgur_client_id.empty()) {
         out << "imgur_client_id = \"" << c.imgur_client_id << "\"\n";
     }
+    out << "imgur_direct_link = " << (c.imgur_direct_link ? "true" : "false") << "\n";
+    out << "imgur_open_browser = " << (c.imgur_open_browser ? "true" : "false") << "\n";
+    out << "imgur_auto_copy = " << (c.imgur_auto_copy ? "true" : "false") << "\n";
+    out << "recent_files = [";
+    for (size_t i = 0; i < c.recent_files.size(); i++) {
+        if (i > 0) out << ", ";
+        out << "\"" << c.recent_files[i] << "\"";
+    }
+    out << "]\n";
     return true;
 }
 

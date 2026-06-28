@@ -53,7 +53,6 @@ void App::open_file(std::string path) {
 
     current_path_ = path;
     decoded_image_ = DecodedImage{};
-    bgra_cache_.clear();
     dragging_ = false;
     zoom_ = config_.default_zoom;
     pan_x_ = 0.0f;
@@ -63,6 +62,22 @@ void App::open_file(std::string path) {
     auto dir = fp.parent_path().string();
     load_directory(dir);
     load_image(path);
+
+    // Track recent files
+    {
+        auto& recent = config_.recent_files;
+        auto it = std::find(recent.begin(), recent.end(), path);
+        if (it != recent.end()) {
+            std::rotate(recent.begin(), it, it + 1);
+        } else {
+            recent.insert(recent.begin(), path);
+            if (recent.size() > Config::kMaxRecentFiles) {
+                recent.pop_back();
+            }
+        }
+        Config::save(config_);
+    }
+
     render();
 }
 
@@ -176,8 +191,6 @@ void App::delete_image() {
     // No more images — clear state
     current_path_.clear();
     decoded_image_ = {};
-    current_image_ = {};
-    bgra_cache_.clear();
     exif_info_ = {};
     render();
 }
