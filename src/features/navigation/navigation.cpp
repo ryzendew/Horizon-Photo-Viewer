@@ -341,27 +341,14 @@ void App::load_image(std::string path) {
         }
     }
 
-    current_image_ = DecodedImage{
+    decoded_image_ = DecodedImage{
         .rgba = std::move(result.pixels),
         .width = result.width,
         .height = result.height,
         .stride = result.width * 4,
     };
-    decoded_image_ = current_image_;
 
-    // Rebuild BGRA cache (skipped for SVGs — rendered as vectors)
-    if (svg_source_data_.empty()) {
-        size_t npix = (size_t)decoded_image_.width * decoded_image_.height;
-        bgra_cache_.resize(npix * 4);
-        for (size_t i = 0; i < npix; i++) {
-            bgra_cache_[i * 4 + 0] = decoded_image_.rgba[i * 4 + 2];
-            bgra_cache_[i * 4 + 1] = decoded_image_.rgba[i * 4 + 1];
-            bgra_cache_[i * 4 + 2] = decoded_image_.rgba[i * 4 + 0];
-            bgra_cache_[i * 4 + 3] = decoded_image_.rgba[i * 4 + 3];
-        }
-    }
-
-    // Cache thumbnail for the current image
+    // Cache thumbnail for the current image (before BGRA swizzle — thumbnail gen needs RGBA)
     if (dir_image_index_ >= 0 && svg_source_data_.empty()) {
         gen_thumb_bgra(decoded_image_.rgba, decoded_image_.width, decoded_image_.height,
                        thumb_cache_[dir_image_index_],
@@ -392,6 +379,16 @@ void App::load_image(std::string path) {
         evict_thumb_cache();
         cairo_surface_destroy(ts);
     }
+
+    // Swizzle decoded_image_ RGBA -> BGRA in-place for direct Cairo display
+    // (skipped for SVGs — rendered as vectors, not pixel data)
+    if (svg_source_data_.empty()) {
+        size_t npix = (size_t)decoded_image_.width * decoded_image_.height;
+        for (size_t i = 0; i < npix; i++) {
+            std::swap(decoded_image_.rgba[i * 4 + 0], decoded_image_.rgba[i * 4 + 2]);
+        }
+    }
+
     invalidate_thumb_strip();
 
     // Clear markup, crop, and rotation state for new image

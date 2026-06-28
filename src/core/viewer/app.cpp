@@ -465,7 +465,7 @@ void App::present() {
                   << " cache_dims=" << svg_vector_w_ << "x" << svg_vector_h_
                   << " draw=" << draw_w << "x" << draw_h
                   << " native=" << orig_img_w_ << "x" << orig_img_h_
-                  << " bgra=" << bgra_cache_.size()
+                  << " rgba=" << decoded_image_.rgba.size()
                   << "\n";
         if (svg_doc_) {
             // --- SVG rendering: cache at max(draw, native), only rebuild when cache too small ---
@@ -519,7 +519,7 @@ void App::present() {
             cairo_scale(cr, (double)draw_w / decoded_image_.width,
                             (double)draw_h / decoded_image_.height);
             cairo_surface_t* img_surf = cairo_image_surface_create_for_data(
-                bgra_cache_.data(),
+                decoded_image_.rgba.data(),
                 CAIRO_FORMAT_ARGB32,
                 decoded_image_.width, decoded_image_.height,
                 decoded_image_.width * 4
@@ -2453,9 +2453,10 @@ std::string App::render_current_image_to_png() {
         for (int x = 0; x < w; x++) {
             int si = (y * w + x) * 4;
             int di = y * stride + x * 4;
-            uint8_t r = decoded_image_.rgba[si + 0];
+            // decoded_image_.rgba is now BGRA (swizzled in-place after thumbnail gen)
+            uint8_t b = decoded_image_.rgba[si + 0];
             uint8_t g = decoded_image_.rgba[si + 1];
-            uint8_t b = decoded_image_.rgba[si + 2];
+            uint8_t r = decoded_image_.rgba[si + 2];
             uint8_t a = decoded_image_.rgba[si + 3];
             uint16_t alpha = a;
             dst[di + 0] = (uint8_t)((uint16_t)b * alpha / 255);

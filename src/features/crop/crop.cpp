@@ -104,16 +104,6 @@ void App::apply_crop() {
     decoded_image_.height = h;
     decoded_image_.stride = w * 4;
 
-    // Rebuild BGRA cache
-    size_t npix = (size_t)w * h;
-    bgra_cache_.resize(npix * 4);
-    for (size_t i = 0; i < npix; i++) {
-        bgra_cache_[i * 4 + 0] = decoded_image_.rgba[i * 4 + 2];
-        bgra_cache_[i * 4 + 1] = decoded_image_.rgba[i * 4 + 1];
-        bgra_cache_[i * 4 + 2] = decoded_image_.rgba[i * 4 + 0];
-        bgra_cache_[i * 4 + 3] = decoded_image_.rgba[i * 4 + 3];
-    }
-
     crop_active_ = false;
     image_modified_ = true;
     update_title();
