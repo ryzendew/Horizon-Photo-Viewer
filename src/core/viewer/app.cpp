@@ -474,13 +474,6 @@ void App::present() {
         cairo_rotate(cr, rotation_ * M_PI / 180.0);
         cairo_translate(cr, -draw_w / 2.0, -draw_h / 2.0);
 
-        std::cerr << "[present] svg_doc=" << (void*)svg_doc_
-                  << " cache=" << (void*)svg_vector_cache_
-                  << " cache_dims=" << svg_vector_w_ << "x" << svg_vector_h_
-                  << " draw=" << draw_w << "x" << draw_h
-                  << " native=" << orig_img_w_ << "x" << orig_img_h_
-                  << " rgba=" << decoded_image_.rgba.size()
-                  << "\n";
         if (svg_doc_) {
             // --- SVG rendering: cache at max(draw, native), only rebuild when cache too small ---
             int nw = std::max(draw_w, (int)orig_img_w_);
@@ -1101,15 +1094,9 @@ void App::present() {
         // --- Tool submenu ---
         int sub_x = 10;
         int sub_y = Overlay::kToolbarHeight + 10;
-        int tool_btn_w = 56, tool_btn_h = 28;
-        const char* tool_names[] = {"Pen", "Line", "Arrow", "Rect", "Ellipse"};
-        int num_tools = 5;
-        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
-                               CAIRO_FONT_WEIGHT_NORMAL);
-        cairo_set_font_size(cr, 12);
-        for (int i = 0; i < num_tools; i++) {
-            int tx = sub_x + i * (tool_btn_w + 4);
-            bool active = (int)markup_tool_ == i;
+        int tool_btn_w = 48, tool_btn_h = 28;
+
+        auto m3_btn_fill = [&](int x, int y, int w, int h, bool active) {
             if (active) {
                 cairo_set_source_rgba(cr, m3::primary_container_r, m3::primary_container_g,
                                       m3::primary_container_b, 1.0);
@@ -1117,13 +1104,32 @@ void App::present() {
                 cairo_set_source_rgba(cr, m3::surface_container_high_r, m3::surface_container_high_g,
                                       m3::surface_container_high_b, 0.9);
             }
-            overlay_.draw_rounded_rect(cr, tx, sub_y, tool_btn_w, tool_btn_h, 6);
+            overlay_.draw_rounded_rect(cr, x, y, w, h, 8);
             cairo_fill(cr);
+        };
+
+        auto m3_btn_text = [&](int x, int y, int w, int h, const char* text) {
+            cairo_text_extents_t te;
+            cairo_text_extents(cr, text, &te);
+            double tx = x + (w - te.width) / 2.0 - te.x_bearing;
+            double ty = y + (h - te.height) / 2.0 - te.y_bearing;
+            cairo_move_to(cr, tx, ty);
+            cairo_show_text(cr, text);
+        };
+
+        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                               CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, 12);
+        const char* tool_names[] = {"Pen", "Line", "Arrow", "Rect", "Ellipse", "Text"};
+        int num_tools = 6;
+        for (int i = 0; i < num_tools; i++) {
+            int tx = sub_x + i * (tool_btn_w + 4);
+            bool active = (int)markup_tool_ == i;
+            m3_btn_fill(tx, sub_y, tool_btn_w, tool_btn_h, active);
             cairo_set_source_rgba(cr, active ? m3::on_primary_container_r : m3::on_surface_r,
                                   active ? m3::on_primary_container_g : m3::on_surface_g,
                                   active ? m3::on_primary_container_b : m3::on_surface_b, 0.87);
-            cairo_move_to(cr, tx + 8, sub_y + 18);
-            cairo_show_text(cr, tool_names[i]);
+            m3_btn_text(tx, sub_y, tool_btn_w, tool_btn_h, tool_names[i]);
             markup_buttons.push_back({tx, sub_y, tool_btn_w, tool_btn_h,
                                       "MTool" + std::to_string(i), {}, {}});
         }
@@ -1174,20 +1180,11 @@ void App::present() {
         for (int i = 0; i < 3; i++) {
             int tx = sub_x + i * (thick_btn_w + 4);
             bool active = std::abs(markup_thickness_ - thicknesses[i]) < 0.1f;
-            if (active) {
-                cairo_set_source_rgba(cr, m3::primary_container_r, m3::primary_container_g,
-                                      m3::primary_container_b, 1.0);
-            } else {
-                cairo_set_source_rgba(cr, m3::surface_container_high_r, m3::surface_container_high_g,
-                                      m3::surface_container_high_b, 0.9);
-            }
-            overlay_.draw_rounded_rect(cr, tx, sub_y, thick_btn_w, thick_btn_h, 6);
-            cairo_fill(cr);
+            m3_btn_fill(tx, sub_y, thick_btn_w, thick_btn_h, active);
             cairo_set_source_rgba(cr, active ? m3::on_primary_container_r : m3::on_surface_r,
                                   active ? m3::on_primary_container_g : m3::on_surface_g,
                                   active ? m3::on_primary_container_b : m3::on_surface_b, 0.87);
-            cairo_move_to(cr, tx + 10, sub_y + 18);
-            cairo_show_text(cr, thick_labels[i]);
+            m3_btn_text(tx, sub_y, thick_btn_w, thick_btn_h, thick_labels[i]);
             markup_buttons.push_back({tx, sub_y, thick_btn_w, thick_btn_h,
                                       "MThick_" + std::to_string(i), {}, {}});
         }
@@ -1198,19 +1195,292 @@ void App::present() {
             int uy = Overlay::kToolbarHeight + 80;
             int uw = 56, uh = 28;
             if (!markup_elements_.empty()) {
-                cairo_set_source_rgba(cr, m3::surface_container_high_r, m3::surface_container_high_g,
-                                      m3::surface_container_high_b, 0.9);
+                m3_btn_fill(ux, uy, uw, uh, false);
             } else {
                 cairo_set_source_rgba(cr, m3::surface_container_r, m3::surface_container_g,
                                       m3::surface_container_b, 0.5);
+                overlay_.draw_rounded_rect(cr, ux, uy, uw, uh, 8);
+                cairo_fill(cr);
             }
-            overlay_.draw_rounded_rect(cr, ux, uy, uw, uh, 6);
-            cairo_fill(cr);
             cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
                                   m3::on_surface_b, markup_elements_.empty() ? 0.3 : 0.87);
-            cairo_move_to(cr, ux + 14, uy + 18);
-            cairo_show_text(cr, "Undo");
+            m3_btn_text(ux, uy, uw, uh, "Undo");
             markup_buttons.push_back({ux, uy, uw, uh, "MUndo", {}, {}});
+        }
+
+        // --- Font family dropdown ---
+        {
+            int fy = Overlay::kToolbarHeight + 116;
+            int dw = 90, dh = 24;
+            int dx = sub_x + 36;
+            cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                                   CAIRO_FONT_WEIGHT_BOLD);
+            cairo_set_font_size(cr, 10);
+            cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                  m3::on_surface_variant_b, 0.6);
+            cairo_move_to(cr, sub_x, fy + dh / 2 + 3);
+            cairo_show_text(cr, "Font:");
+
+            // Dropdown button
+            m3_btn_fill(dx, fy, dw, dh, false);
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
+                                  m3::on_surface_b, 0.87);
+
+            // Short display name for current font
+            const char* disp = markup_font_family_.c_str();
+            m3_btn_text(dx, fy, dw, dh, disp);
+            // Arrow indicator
+            cairo_set_font_size(cr, 8);
+            cairo_text_extents_t te_a;
+            cairo_text_extents(cr, "\u25BC", &te_a);
+            double ax = dx + dw - te_a.width - 6;
+            double ay = fy + (dh - te_a.height) / 2.0 - te_a.y_bearing;
+            cairo_move_to(cr, ax, ay);
+            cairo_show_text(cr, markup_font_dropdown_open_ ? "\u25B2" : "\u25BC");
+            cairo_set_font_size(cr, 10);
+            markup_buttons.push_back({dx, fy, dw, dh, "MFontDropdown", {}, {}});
+
+            // Dropdown popup
+            if (markup_font_dropdown_open_) {
+                struct FontOpt { const char* name; const char* family; };
+                FontOpt font_opts[] = {
+                    {"Sans", "sans-serif"},
+                    {"Serif", "serif"},
+                    {"Mono", "monospace"},
+                    {"DejaVu Sans", "DejaVu Sans"},
+                    {"DejaVu Serif", "DejaVu Serif"},
+                    {"DejaVu Mono", "DejaVu Sans Mono"},
+                };
+                int num_opts = 6;
+                int item_h = 22;
+                int popup_x = dx;
+                int popup_y = fy + dh + 2;
+                int popup_w = dw;
+                int popup_h = num_opts * item_h;
+
+                // Popup background
+                cairo_set_source_rgba(cr, m3::surface_container_r, m3::surface_container_g,
+                                      m3::surface_container_b, 0.95);
+                overlay_.draw_rounded_rect(cr, popup_x, popup_y, popup_w, popup_h, 4);
+                cairo_fill(cr);
+
+                cairo_set_font_size(cr, 10);
+                for (int i = 0; i < num_opts; i++) {
+                    int iy = popup_y + i * item_h;
+                    bool active = markup_font_family_ == font_opts[i].family;
+                    if (active) {
+                        cairo_set_source_rgba(cr, m3::primary_container_r, m3::primary_container_g,
+                                              m3::primary_container_b, 0.7);
+                        cairo_rectangle(cr, popup_x + 2, iy, popup_w - 4, item_h);
+                        cairo_fill(cr);
+                    }
+                    cairo_set_source_rgba(cr, active ? m3::on_primary_container_r : m3::on_surface_r,
+                                          active ? m3::on_primary_container_g : m3::on_surface_g,
+                                          active ? m3::on_primary_container_b : m3::on_surface_b, 0.87);
+                    cairo_move_to(cr, popup_x + 6, iy + 15);
+                    cairo_show_text(cr, font_opts[i].name);
+                    markup_buttons.push_back({popup_x, iy, popup_w, item_h,
+                                              "MFontDropdown_" + std::to_string(i), {}, {}});
+                }
+            }
+        }
+
+        // --- Font size row ---
+        {
+            int sy = Overlay::kToolbarHeight + 148;
+            cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                                   CAIRO_FONT_WEIGHT_BOLD);
+            cairo_set_font_size(cr, 10);
+            int sw = 42, sh = 24;
+            cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                  m3::on_surface_variant_b, 0.6);
+            cairo_move_to(cr, sub_x, sy + sh / 2 + 3);
+            cairo_show_text(cr, "Size:");
+
+            // Smaller / Bigger buttons
+            int dec_x = sub_x + 34;
+            m3_btn_fill(dec_x, sy, sw, sh, false);
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
+                                  m3::on_surface_b, 0.87);
+            m3_btn_text(dec_x, sy, sw, sh, "\u2212");
+            markup_buttons.push_back({dec_x, sy, sw, sh, "MFontSizeDec", {}, {}});
+
+            // Clickable size display box
+            int sb_x = dec_x + sw + 4;
+            int sb_w = 48;
+            m3_btn_fill(sb_x, sy, sb_w, sh, markup_fontsize_editing_);
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
+                                  m3::on_surface_b, 0.87);
+            if (markup_fontsize_editing_) {
+                m3_btn_text(sb_x, sy, sb_w, sh, markup_fontsize_input_.c_str());
+            } else {
+                char buf[16];
+                snprintf(buf, sizeof(buf), "%.0f", markup_font_size_);
+                m3_btn_text(sb_x, sy, sb_w, sh, buf);
+            }
+            markup_buttons.push_back({sb_x, sy, sb_w, sh, "MFontSizeBox", {}, {}});
+
+            int inc_x = sb_x + sb_w + 4;
+            m3_btn_fill(inc_x, sy, sw, sh, false);
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
+                                  m3::on_surface_b, 0.87);
+            m3_btn_text(inc_x, sy, sw, sh, "+");
+            markup_buttons.push_back({inc_x, sy, sw, sh, "MFontSizeInc", {}, {}});
+        }
+
+        // --- Shadow / Outline toggles ---
+        {
+            int ty = Overlay::kToolbarHeight + 180;
+            cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                                   CAIRO_FONT_WEIGHT_BOLD);
+            cairo_set_font_size(cr, 10);
+            int tw = 52, th = 24;
+            cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                  m3::on_surface_variant_b, 0.6);
+            cairo_move_to(cr, sub_x, ty + th / 2 + 3);
+            cairo_show_text(cr, "FX:");
+            // Shadow toggle
+            int sx_btn = sub_x + 28;
+            m3_btn_fill(sx_btn, ty, tw, th, markup_text_shadow_);
+            cairo_set_source_rgba(cr, markup_text_shadow_ ? m3::on_primary_container_r : m3::on_surface_r,
+                                  markup_text_shadow_ ? m3::on_primary_container_g : m3::on_surface_g,
+                                  markup_text_shadow_ ? m3::on_primary_container_b : m3::on_surface_b, 0.87);
+            m3_btn_text(sx_btn, ty, tw, th, "Shadow");
+            markup_buttons.push_back({sx_btn, ty, tw, th, "MShadow", {}, {}});
+
+            // Outline toggle
+            int ox = sx_btn + tw + 4;
+            m3_btn_fill(ox, ty, tw, th, markup_text_outline_);
+            cairo_set_source_rgba(cr, markup_text_outline_ ? m3::on_primary_container_r : m3::on_surface_r,
+                                  markup_text_outline_ ? m3::on_primary_container_g : m3::on_surface_g,
+                                  markup_text_outline_ ? m3::on_primary_container_b : m3::on_surface_b, 0.87);
+            m3_btn_text(ox, ty, tw, th, "Outline");
+            markup_buttons.push_back({ox, ty, tw, th, "MOutline", {}, {}});
+        }
+
+        // --- Line spacing row ---
+        {
+            int ly = Overlay::kToolbarHeight + 214;
+            cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                                   CAIRO_FONT_WEIGHT_BOLD);
+            cairo_set_font_size(cr, 10);
+            int sw = 42, sh = 24;
+            cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                  m3::on_surface_variant_b, 0.6);
+            cairo_move_to(cr, sub_x, ly + sh / 2 + 3);
+            cairo_show_text(cr, "Line Spacing:");
+            int dec_x = sub_x + 76;
+            m3_btn_fill(dec_x, ly, sw, sh, false);
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
+                                  m3::on_surface_b, 0.87);
+            m3_btn_text(dec_x, ly, sw, sh, "\u2212");
+            markup_buttons.push_back({dec_x, ly, sw, sh, "MLineSpacingDec", {}, {}});
+
+            // Clickable line spacing display box
+            int sb_x = dec_x + sw + 4;
+            int sb_w = 48;
+            m3_btn_fill(sb_x, ly, sb_w, sh, markup_linespacing_editing_);
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
+                                  m3::on_surface_b, 0.87);
+            if (markup_linespacing_editing_) {
+                m3_btn_text(sb_x, ly, sb_w, sh, markup_linespacing_input_.c_str());
+            } else {
+                char buf[16];
+                snprintf(buf, sizeof(buf), "%.1f", markup_line_spacing_);
+                m3_btn_text(sb_x, ly, sb_w, sh, buf);
+            }
+            markup_buttons.push_back({sb_x, ly, sb_w, sh, "MLineSpacingBox", {}, {}});
+
+            int inc_x = sb_x + sb_w + 4;
+            m3_btn_fill(inc_x, ly, sw, sh, false);
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
+                                  m3::on_surface_b, 0.87);
+            m3_btn_text(inc_x, ly, sw, sh, "+");
+            markup_buttons.push_back({inc_x, ly, sw, sh, "MLineSpacingInc", {}, {}});
+        }
+
+        // --- Outline width row ---
+        {
+            int ow = Overlay::kToolbarHeight + 248;
+            int sw = 42, sh = 24;
+            cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                                   CAIRO_FONT_WEIGHT_BOLD);
+            cairo_set_font_size(cr, 10);
+            cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                  m3::on_surface_variant_b, 0.6);
+            cairo_move_to(cr, sub_x, ow + sh / 2 + 3);
+            cairo_show_text(cr, "Outline:");
+            int dec_x = sub_x + 44;
+            m3_btn_fill(dec_x, ow, sw, sh, false);
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
+                                  m3::on_surface_b, 0.87);
+            m3_btn_text(dec_x, ow, sw, sh, "\u2212");
+            markup_buttons.push_back({dec_x, ow, sw, sh, "MOutlineWidthDec", {}, {}});
+
+            // Clickable outline width display box
+            int sb_x = dec_x + sw + 4;
+            int sb_w = 48;
+            m3_btn_fill(sb_x, ow, sb_w, sh, markup_outline_width_editing_);
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
+                                  m3::on_surface_b, 0.87);
+            if (markup_outline_width_editing_) {
+                m3_btn_text(sb_x, ow, sb_w, sh, markup_outline_width_input_.c_str());
+            } else {
+                char buf[16];
+                snprintf(buf, sizeof(buf), "%.1f", markup_outline_width_);
+                m3_btn_text(sb_x, ow, sb_w, sh, buf);
+            }
+            markup_buttons.push_back({sb_x, ow, sb_w, sh, "MOutlineWidthBox", {}, {}});
+
+            int inc_x = sb_x + sb_w + 4;
+            m3_btn_fill(inc_x, ow, sw, sh, false);
+            cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
+                                  m3::on_surface_b, 0.87);
+            m3_btn_text(inc_x, ow, sw, sh, "+");
+            markup_buttons.push_back({inc_x, ow, sw, sh, "MOutlineWidthInc", {}, {}});
+
+            // Outline color presets
+            struct { const char* label; uint32_t color; } outline_colors[] = {
+                {"Blk", 0x000000FF}, {"Wht", 0xFFFFFFFF},
+                {"Red", 0xFF0000FF}, {"Ylw", 0xFFFF00FF},
+                {"Grn", 0x00FF00FF}, {"Blu", 0x0000FFFF},
+            };
+            int num_oc = 6;
+            int cw = 28, ch = 20;
+            int cx = inc_x + sw + 8;
+            cairo_set_font_size(cr, 8);
+            for (int i = 0; i < num_oc; i++) {
+                int px = cx + i * (cw + 3);
+                bool active = markup_outline_color_ == outline_colors[i].color;
+                float r = ((outline_colors[i].color >> 24) & 0xFF) / 255.0f;
+                float g = ((outline_colors[i].color >> 16) & 0xFF) / 255.0f;
+                float b = ((outline_colors[i].color >> 8) & 0xFF) / 255.0f;
+                float a = (outline_colors[i].color & 0xFF) / 255.0f;
+                if (active) {
+                    cairo_set_source_rgba(cr, m3::primary_container_r, m3::primary_container_g,
+                                          m3::primary_container_b, 1.0);
+                } else {
+                    cairo_set_source_rgba(cr, m3::surface_container_high_r, m3::surface_container_high_g,
+                                          m3::surface_container_high_b, 0.9);
+                }
+                overlay_.draw_rounded_rect(cr, px, ow, cw, ch, 4);
+                cairo_fill(cr);
+                // Color circle
+                float cr_x = px + 10;
+                float cr_y = ow + ch / 2;
+                cairo_set_source_rgba(cr, r, g, b, a);
+                cairo_arc(cr, cr_x, cr_y, 6, 0, 2 * M_PI);
+                cairo_fill(cr);
+                // Border for white swatch
+                if (outline_colors[i].color == 0xFFFFFFFF) {
+                    cairo_set_source_rgba(cr, m3::outline_variant_r, m3::outline_variant_g,
+                                          m3::outline_variant_b, 0.5);
+                    cairo_arc(cr, cr_x, cr_y, 6, 0, 2 * M_PI);
+                    cairo_set_line_width(cr, 1);
+                    cairo_stroke(cr);
+                }
+                markup_buttons.push_back({px, ow, cw, ch, "MOutlineColor_" + std::to_string(i), {}, {}});
+            }
         }
 
         // Apply / Cancel floating buttons
@@ -1223,37 +1493,327 @@ void App::present() {
         cairo_set_source_rgba(cr, m3::on_primary_container_r, m3::on_primary_container_g,
                               m3::on_primary_container_b, 1.0);
         cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
-                               CAIRO_FONT_WEIGHT_NORMAL);
+                               CAIRO_FONT_WEIGHT_BOLD);
         cairo_set_font_size(cr, 14);
-        cairo_move_to(cr, cx + 30, btn_y + 24);
-        cairo_show_text(cr, "Apply");
+        m3_btn_text(cx, btn_y, btn_w, btn_h, "Apply");
         markup_buttons.push_back({cx, btn_y, btn_w, btn_h, "MarkupApply", {}, {}});
 
         cx += btn_w + 10;
-        cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
-                              m3::on_surface_variant_b, 0.15);
+        cairo_set_source_rgba(cr, m3::surface_container_high_r, m3::surface_container_high_g,
+                              m3::surface_container_high_b, 0.9);
         overlay_.draw_rounded_rect(cr, cx, btn_y, btn_w, btn_h, 8);
         cairo_fill(cr);
         cairo_set_source_rgba(cr, m3::on_surface_r, m3::on_surface_g,
                               m3::on_surface_b, 0.87);
-        cairo_move_to(cr, cx + 26, btn_y + 24);
-        cairo_show_text(cr, "Cancel");
+        cairo_select_font_face(cr, "sans-serif", CAIRO_FONT_SLANT_NORMAL,
+                               CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, 14);
+        m3_btn_text(cx, btn_y, btn_w, btn_h, "Cancel");
         markup_buttons.push_back({cx, btn_y, btn_w, btn_h, "MarkupCancel", {}, {}});
 
         for (auto& btn : markup_buttons) {
             if (btn.label == "MarkupApply") btn.action = [this]() { commit_markup(); };
             else if (btn.label == "MarkupCancel") btn.action = [this]() { cancel_markup(); };
-            else if (btn.label == "MTool0") btn.action = [this]() { markup_tool_ = MarkupTool::kPen; render(); };
-            else if (btn.label == "MTool1") btn.action = [this]() { markup_tool_ = MarkupTool::kLine; render(); };
-            else if (btn.label == "MTool2") btn.action = [this]() { markup_tool_ = MarkupTool::kArrow; render(); };
-            else if (btn.label == "MTool3") btn.action = [this]() { markup_tool_ = MarkupTool::kRect; render(); };
-            else if (btn.label == "MTool4") btn.action = [this]() { markup_tool_ = MarkupTool::kEllipse; render(); };
+            else if (btn.label == "MTool0") btn.action = [this]() {
+                finalize_text_();
+                markup_tool_ = MarkupTool::kPen; render();
+            };
+            else if (btn.label == "MTool1") btn.action = [this]() {
+                finalize_text_();
+                markup_tool_ = MarkupTool::kLine; render();
+            };
+            else if (btn.label == "MTool2") btn.action = [this]() {
+                finalize_text_();
+                markup_tool_ = MarkupTool::kArrow; render();
+            };
+            else if (btn.label == "MTool3") btn.action = [this]() {
+                finalize_text_();
+                markup_tool_ = MarkupTool::kRect; render();
+            };
+            else if (btn.label == "MTool4") btn.action = [this]() {
+                finalize_text_();
+                markup_tool_ = MarkupTool::kEllipse; render();
+            };
+            else if (btn.label == "MTool5") btn.action = [this]() {
+                finalize_text_();
+                markup_tool_ = MarkupTool::kText; render();
+            };
             else if (btn.label == "MHueBar") btn.action = {}; // handled in on_pointer
             else if (btn.label == "MThick_0") btn.action = [this]() { markup_thickness_ = 2.0f; render(); };
             else if (btn.label == "MThick_1") btn.action = [this]() { markup_thickness_ = 4.0f; render(); };
             else if (btn.label == "MThick_2") btn.action = [this]() { markup_thickness_ = 8.0f; render(); };
             else if (btn.label == "MUndo") btn.action = [this]() { undo_markup(); };
+            else if (btn.label == "MFontDropdown") btn.action = [this]() {
+                markup_font_dropdown_open_ = !markup_font_dropdown_open_;
+                render();
+            };
+            else if (btn.label.rfind("MFontDropdown_", 0) == 0) btn.action = [this, label = btn.label]() {
+                int idx = std::stoi(label.substr(14));
+                const char* families[] = {"sans-serif", "serif", "monospace",
+                                          "DejaVu Sans", "DejaVu Serif", "DejaVu Sans Mono"};
+                if (idx >= 0 && idx < 6) {
+                    markup_font_family_ = families[idx];
+                    if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                        markup_current_->font_family = markup_font_family_;
+                }
+                markup_font_dropdown_open_ = false;
+                render();
+            };
+            else if (btn.label == "MFontSizeDec") btn.action = [this]() {
+                if (markup_fontsize_editing_) {
+                    if (!markup_fontsize_input_.empty()) {
+                        try {
+                            float val = std::stof(markup_fontsize_input_);
+                            markup_font_size_ = std::clamp(val, 1.0f, 999.0f);
+                            if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                                markup_current_->font_size = markup_font_size_;
+                        } catch (...) {}
+                    }
+                    markup_fontsize_editing_ = false;
+                }
+                float new_size = std::max(8.0f, markup_font_size_ - 4.0f);
+                if (markup_text_sel_start_ >= 0 && markup_text_sel_start_ != markup_text_cursor_pos_ &&
+                    markup_text_editing_ && markup_current_) {
+                    apply_text_format_(0, new_size);
+                } else {
+                    markup_font_size_ = new_size;
+                    if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                        markup_current_->font_size = markup_font_size_;
+                }
+                render();
+            };
+            else if (btn.label == "MFontSizeInc") btn.action = [this]() {
+                if (markup_fontsize_editing_) {
+                    if (!markup_fontsize_input_.empty()) {
+                        try {
+                            float val = std::stof(markup_fontsize_input_);
+                            markup_font_size_ = std::clamp(val, 1.0f, 999.0f);
+                            if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                                markup_current_->font_size = markup_font_size_;
+                        } catch (...) {}
+                    }
+                    markup_fontsize_editing_ = false;
+                }
+                float new_size = std::min(256.0f, markup_font_size_ + 4.0f);
+                if (markup_text_sel_start_ >= 0 && markup_text_sel_start_ != markup_text_cursor_pos_ &&
+                    markup_text_editing_ && markup_current_) {
+                    apply_text_format_(0, new_size);
+                } else {
+                    markup_font_size_ = new_size;
+                    if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                        markup_current_->font_size = markup_font_size_;
+                }
+                render();
+            };
+            else if (btn.label == "MFontSizeBox") btn.action = [this]() {
+                if (markup_fontsize_editing_) {
+                    if (!markup_fontsize_input_.empty()) {
+                        try {
+                            float val = std::stof(markup_fontsize_input_);
+                            markup_font_size_ = std::clamp(val, 1.0f, 999.0f);
+                            if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                                markup_current_->font_size = markup_font_size_;
+                        } catch (...) {}
+                    }
+                    markup_fontsize_editing_ = false;
+                } else {
+                    markup_fontsize_editing_ = true;
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "%.0f", markup_font_size_);
+                    markup_fontsize_input_ = buf;
+                }
+                render();
+            };
+            else if (btn.label == "MShadow") btn.action = [this]() {
+                markup_text_shadow_ = !markup_text_shadow_;
+                if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                    markup_current_->text_shadow = markup_text_shadow_;
+                render();
+            };
+            else if (btn.label == "MOutline") btn.action = [this]() {
+                markup_text_outline_ = !markup_text_outline_;
+                if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                    markup_current_->text_outline = markup_text_outline_;
+                render();
+            };
+            else if (btn.label == "MOutlineWidthDec") btn.action = [this]() {
+                if (markup_outline_width_editing_) {
+                    if (!markup_outline_width_input_.empty()) {
+                        try {
+                            float val = std::stof(markup_outline_width_input_);
+                            markup_outline_width_ = std::clamp(val, 0.5f, 20.0f);
+                            if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                                markup_current_->outline_width = markup_outline_width_;
+                        } catch (...) {}
+                    }
+                    markup_outline_width_editing_ = false;
+                }
+                markup_outline_width_ = std::max(0.5f, markup_outline_width_ - 0.5f);
+                if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                    markup_current_->outline_width = markup_outline_width_;
+                render();
+            };
+            else if (btn.label == "MOutlineWidthInc") btn.action = [this]() {
+                if (markup_outline_width_editing_) {
+                    if (!markup_outline_width_input_.empty()) {
+                        try {
+                            float val = std::stof(markup_outline_width_input_);
+                            markup_outline_width_ = std::clamp(val, 0.5f, 20.0f);
+                            if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                                markup_current_->outline_width = markup_outline_width_;
+                        } catch (...) {}
+                    }
+                    markup_outline_width_editing_ = false;
+                }
+                markup_outline_width_ = std::min(20.0f, markup_outline_width_ + 0.5f);
+                if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                    markup_current_->outline_width = markup_outline_width_;
+                render();
+            };
+            else if (btn.label.rfind("MOutlineColor_", 0) == 0) btn.action = [this, label = btn.label]() {
+                int idx = std::stoi(label.substr(14));
+                struct { const char* label; uint32_t color; } colors[] = {
+                    {"Blk", 0x000000FF}, {"Wht", 0xFFFFFFFF},
+                    {"Red", 0xFF0000FF}, {"Ylw", 0xFFFF00FF},
+                    {"Grn", 0x00FF00FF}, {"Blu", 0x0000FFFF},
+                };
+                if (idx >= 0 && idx < 6) {
+                    markup_outline_color_ = colors[idx].color;
+                    if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                        markup_current_->outline_color = markup_outline_color_;
+                }
+                render();
+            };
+            else if (btn.label == "MOutlineWidthBox") btn.action = [this]() {
+                if (markup_outline_width_editing_) {
+                    if (!markup_outline_width_input_.empty()) {
+                        try {
+                            float val = std::stof(markup_outline_width_input_);
+                            markup_outline_width_ = std::clamp(val, 0.5f, 20.0f);
+                            if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                                markup_current_->outline_width = markup_outline_width_;
+                        } catch (...) {}
+                    }
+                    markup_outline_width_editing_ = false;
+                } else {
+                    markup_outline_width_editing_ = true;
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "%.1f", markup_outline_width_);
+                    markup_outline_width_input_ = buf;
+                }
+                render();
+            };
+            else if (btn.label == "MLineSpacingDec") btn.action = [this]() {
+                if (markup_linespacing_editing_) {
+                    if (!markup_linespacing_input_.empty()) {
+                        try {
+                            float val = std::stof(markup_linespacing_input_);
+                            markup_line_spacing_ = std::clamp(val, 0.5f, 4.0f);
+                            if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                                markup_current_->line_spacing = markup_line_spacing_;
+                        } catch (...) {}
+                    }
+                    markup_linespacing_editing_ = false;
+                }
+                markup_line_spacing_ = std::max(0.8f, markup_line_spacing_ - 0.1f);
+                if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                    markup_current_->line_spacing = markup_line_spacing_;
+                render();
+            };
+            else if (btn.label == "MLineSpacingInc") btn.action = [this]() {
+                if (markup_linespacing_editing_) {
+                    if (!markup_linespacing_input_.empty()) {
+                        try {
+                            float val = std::stof(markup_linespacing_input_);
+                            markup_line_spacing_ = std::clamp(val, 0.5f, 4.0f);
+                            if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                                markup_current_->line_spacing = markup_line_spacing_;
+                        } catch (...) {}
+                    }
+                    markup_linespacing_editing_ = false;
+                }
+                markup_line_spacing_ = std::min(4.0f, markup_line_spacing_ + 0.1f);
+                if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                    markup_current_->line_spacing = markup_line_spacing_;
+                render();
+            };
+            else if (btn.label == "MLineSpacingBox") btn.action = [this]() {
+                if (markup_linespacing_editing_) {
+                    if (!markup_linespacing_input_.empty()) {
+                        try {
+                            float val = std::stof(markup_linespacing_input_);
+                            markup_line_spacing_ = std::clamp(val, 0.5f, 4.0f);
+                            if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                                markup_current_->line_spacing = markup_line_spacing_;
+                        } catch (...) {}
+                    }
+                    markup_linespacing_editing_ = false;
+                } else {
+                    markup_linespacing_editing_ = true;
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "%.1f", markup_line_spacing_);
+                    markup_linespacing_input_ = buf;
+                }
+                render();
+            };
         }
+
+        // --- Layer panel (within the markup section) ---
+        if (markup_layer_panel_open_) {
+            std::vector<OverlayButton> layer_buttons;
+            draw_markup_layer_panel(cr, win_w, win_h, layer_buttons);
+            for (auto& btn : layer_buttons) {
+                if (btn.label == "MLayerPanelClose") btn.action = [this]() {
+                    markup_layer_panel_open_ = false;
+                    markup_selected_idx_ = -1;
+                    render();
+                };
+                else if (btn.label.rfind("MLayerSel_", 0) == 0) btn.action = [this, label = btn.label]() {
+                    int idx = std::stoi(label.substr(10));
+                    if (markup_text_editing_) finalize_text_();
+                    markup_selected_idx_ = idx;
+                    render();
+                };
+                else if (btn.label.rfind("MLayerVis_", 0) == 0) btn.action = [this, label = btn.label]() {
+                    int idx = std::stoi(label.substr(10));
+                    if (idx >= 0 && idx < (int)markup_elements_.size()) {
+                        markup_elements_[idx].visible = !markup_elements_[idx].visible;
+                        render();
+                    }
+                };
+                else if (btn.label.rfind("MLayerDel_", 0) == 0) btn.action = [this, label = btn.label]() {
+                    int idx = std::stoi(label.substr(10));
+                    if (idx >= 0 && idx < (int)markup_elements_.size()) {
+                        markup_elements_.erase(markup_elements_.begin() + idx);
+                        if (markup_selected_idx_ == idx)
+                            markup_selected_idx_ = -1;
+                        else if (markup_selected_idx_ > idx)
+                            markup_selected_idx_--;
+                        render();
+                    }
+                };
+                else if (btn.label == "MLayerUp") btn.action = [this]() {
+                    if (markup_selected_idx_ > 0) {
+                        std::swap(markup_elements_[markup_selected_idx_],
+                                  markup_elements_[markup_selected_idx_ - 1]);
+                        markup_selected_idx_--;
+                        render();
+                    }
+                };
+                else if (btn.label == "MLayerDown") btn.action = [this]() {
+                    int last = (int)markup_elements_.size() - 1;
+                    if (markup_selected_idx_ >= 0 && markup_selected_idx_ < last) {
+                        std::swap(markup_elements_[markup_selected_idx_],
+                                  markup_elements_[markup_selected_idx_ + 1]);
+                        markup_selected_idx_++;
+                        render();
+                    }
+                };
+            }
+            markup_buttons.insert(markup_buttons.end(),
+                                  layer_buttons.begin(), layer_buttons.end());
+        }
+
         toolbar_buttons_.insert(toolbar_buttons_.end(),
                                 markup_buttons.begin(), markup_buttons.end());
     }
@@ -1695,6 +2255,184 @@ void App::on_key(const KeyEvent& ev) {
         return; // consume all keys while dialog is active
     }
 
+    // Text editing in markup mode
+    if (markup_text_editing_ && markup_current_ &&
+        markup_current_->type == MarkupTool::kText) {
+        auto sync_text = [&]() {
+            if (markup_selected_idx_ >= 0 &&
+                markup_selected_idx_ < (int)markup_elements_.size())
+                markup_elements_[markup_selected_idx_].text = markup_current_->text;
+        };
+        if (ev.state == WL_KEYBOARD_KEY_STATE_PRESSED) {
+            if (ev.sym == XKB_KEY_Escape) {
+                markup_current_->text.clear();
+                finalize_text_();
+                render();
+                return;
+            }
+            if (ev.sym == XKB_KEY_Return || ev.sym == XKB_KEY_KP_Enter) {
+                markup_text_input_ += '\n';
+                markup_current_->text = markup_text_input_;
+                sync_text();
+                render();
+                return;
+            }
+            if (ev.sym == XKB_KEY_BackSpace) {
+                if (!markup_text_input_.empty()) {
+                    markup_text_input_.pop_back();
+                    markup_current_->text = markup_text_input_;
+                    sync_text();
+                    render();
+                }
+                return;
+            }
+            if (ev.sym == XKB_KEY_Delete) {
+                markup_text_input_.clear();
+                markup_current_->text.clear();
+                sync_text();
+                render();
+                return;
+            }
+            if (ev.utf8_len > 0 && ev.utf8[0] >= 0x20) {
+                markup_text_input_ += std::string(ev.utf8, ev.utf8_len);
+                markup_current_->text = markup_text_input_;
+                sync_text();
+                render();
+                return;
+            }
+        }
+        return;
+    }
+
+    // Font size editing in markup mode
+    if (markup_fontsize_editing_) {
+        if (ev.sym == XKB_KEY_Escape) {
+            markup_fontsize_editing_ = false;
+            render();
+            return;
+        }
+        if (ev.sym == XKB_KEY_Return || ev.sym == XKB_KEY_KP_Enter) {
+            if (!markup_fontsize_input_.empty()) {
+                try {
+                    float val = std::stof(markup_fontsize_input_);
+                    markup_font_size_ = std::clamp(val, 1.0f, 999.0f);
+                    if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                        markup_current_->font_size = markup_font_size_;
+                } catch (...) {}
+            }
+            markup_fontsize_editing_ = false;
+            render();
+            return;
+        }
+        if (ev.sym == XKB_KEY_BackSpace) {
+            if (!markup_fontsize_input_.empty()) {
+                markup_fontsize_input_.pop_back();
+                render();
+            }
+            return;
+        }
+        if (ev.utf8_len > 0) {
+            char c = ev.utf8[0];
+            if (c >= '0' && c <= '9') {
+                if (markup_fontsize_input_.size() < 6) {
+                    markup_fontsize_input_ += c;
+                    render();
+                }
+                return;
+            }
+            if (c == '-' && markup_fontsize_input_.empty()) {
+                markup_fontsize_input_ += c;
+                render();
+                return;
+            }
+        }
+        return;
+    }
+
+    // Line spacing editing in markup mode
+    if (markup_linespacing_editing_) {
+        if (ev.sym == XKB_KEY_Escape) {
+            markup_linespacing_editing_ = false;
+            render();
+            return;
+        }
+        if (ev.sym == XKB_KEY_Return || ev.sym == XKB_KEY_KP_Enter) {
+            if (!markup_linespacing_input_.empty()) {
+                try {
+                    float val = std::stof(markup_linespacing_input_);
+                    markup_line_spacing_ = std::clamp(val, 0.5f, 4.0f);
+                    if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                        markup_current_->line_spacing = markup_line_spacing_;
+                } catch (...) {}
+            }
+            markup_linespacing_editing_ = false;
+            render();
+            return;
+        }
+        if (ev.sym == XKB_KEY_BackSpace) {
+            if (!markup_linespacing_input_.empty()) {
+                markup_linespacing_input_.pop_back();
+                render();
+            }
+            return;
+        }
+        if (ev.utf8_len > 0) {
+            char c = ev.utf8[0];
+            if ((c >= '0' && c <= '9') || c == '.') {
+                if (c == '.' && markup_linespacing_input_.find('.') != std::string::npos)
+                    return;
+                if (markup_linespacing_input_.size() < 6) {
+                    markup_linespacing_input_ += c;
+                    render();
+                }
+                return;
+            }
+        }
+        return;
+    }
+
+    // Outline width editing in markup mode
+    if (markup_outline_width_editing_) {
+        if (ev.sym == XKB_KEY_Escape) {
+            markup_outline_width_editing_ = false;
+            render();
+            return;
+        }
+        if (ev.sym == XKB_KEY_Return || ev.sym == XKB_KEY_KP_Enter) {
+            if (!markup_outline_width_input_.empty()) {
+                try {
+                    float val = std::stof(markup_outline_width_input_);
+                    markup_outline_width_ = std::clamp(val, 0.5f, 20.0f);
+                    if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                        markup_current_->outline_width = markup_outline_width_;
+                } catch (...) {}
+            }
+            markup_outline_width_editing_ = false;
+            render();
+            return;
+        }
+        if (ev.sym == XKB_KEY_BackSpace) {
+            if (!markup_outline_width_input_.empty()) {
+                markup_outline_width_input_.pop_back();
+                render();
+            }
+            return;
+        }
+        if (ev.utf8_len > 0) {
+            char c = ev.utf8[0];
+            if ((c >= '0' && c <= '9') || c == '.') {
+                if (c == '.' && markup_outline_width_input_.find('.') != std::string::npos)
+                    return;
+                if (markup_outline_width_input_.size() < 6) {
+                    markup_outline_width_input_ += c;
+                    render();
+                }
+                return;
+            }
+        }
+        return;
+    }
+
     switch (ev.sym) {
         case XKB_KEY_q:
             if (ev.ctrl) quit();
@@ -2088,12 +2826,64 @@ void App::on_pointer(const PointerEvent& ev) {
             // If click was on toolbar buttons (Apply/Cancel), let them handle it
         }
 
+        // Close font dropdown on outside click
+        if (markup_font_dropdown_open_) {
+            int fy = Overlay::kToolbarHeight + 116;
+            int dx = 10 + 36;
+            int dw = 90, dh = 24;
+            int popup_x = dx;
+            int popup_y = fy + dh + 2;
+            int popup_w = dw;
+            int popup_h = 6 * 22;
+            bool in_dropdown = (ev.x >= dx && ev.x < dx + dw && ev.y >= fy && ev.y < fy + dh) ||
+                               (ev.x >= popup_x && ev.x < popup_x + popup_w && ev.y >= popup_y && ev.y < popup_y + popup_h);
+            if (!in_dropdown) {
+                markup_font_dropdown_open_ = false;
+                render();
+                return;
+            }
+        }
+
         // Hit-test toolbar buttons first (covers markup submenus, apply/cancel)
         if (show_toolbar_) {
             for (int i = 0; i < (int)toolbar_buttons_.size(); i++) {
                 auto& btn = toolbar_buttons_[i];
                 if (ev.x >= btn.x && ev.x < btn.x + btn.w &&
                     ev.y >= btn.y && ev.y < btn.y + btn.h && btn.action) {
+                    // Commit font size / line spacing editing when clicking other buttons
+                    if (markup_fontsize_editing_ && btn.label != "MFontSizeBox") {
+                        if (!markup_fontsize_input_.empty()) {
+                            try {
+                                float val = std::stof(markup_fontsize_input_);
+                                markup_font_size_ = std::clamp(val, 1.0f, 999.0f);
+                                if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                                    markup_current_->font_size = markup_font_size_;
+                            } catch (...) {}
+                        }
+                        markup_fontsize_editing_ = false;
+                    }
+                    if (markup_linespacing_editing_ && btn.label != "MLineSpacingBox") {
+                        if (!markup_linespacing_input_.empty()) {
+                            try {
+                                float val = std::stof(markup_linespacing_input_);
+                                markup_line_spacing_ = std::clamp(val, 0.5f, 4.0f);
+                                if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                                    markup_current_->line_spacing = markup_line_spacing_;
+                            } catch (...) {}
+                        }
+                        markup_linespacing_editing_ = false;
+                    }
+                    if (markup_outline_width_editing_ && btn.label != "MOutlineWidthBox") {
+                        if (!markup_outline_width_input_.empty()) {
+                            try {
+                                float val = std::stof(markup_outline_width_input_);
+                                markup_outline_width_ = std::clamp(val, 0.5f, 20.0f);
+                                if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                                    markup_current_->outline_width = markup_outline_width_;
+                            } catch (...) {}
+                        }
+                        markup_outline_width_editing_ = false;
+                    }
                     toolbar_press_idx_ = i;
                     btn.action();  // triggers render(), showing press state
                     return;
@@ -2110,15 +2900,296 @@ void App::on_pointer(const PointerEvent& ev) {
             if (t < 0) t = 0;
             if (t > 1) t = 1;
             markup_color_ = hsv_to_rgb(t * 360.0f, 1.0f, 1.0f);
+            apply_text_format_(markup_color_, 0);
             render();
             return;
         }
 
-        // Markup mode: start drawing (after button hit-test and hue bar so submenus take priority)
-        if (markup_active_ && !crop_active_) {
-            if (ev.y > Overlay::kToolbarHeight && decoded_image_.width > 0) {
+        // Markup mode: selection + move/resize + start drawing
+        if (markup_active_ && !crop_active_ && decoded_image_.width > 0) {
+            // Click on canvas finalizes font size / line spacing editing
+            if (markup_fontsize_editing_ || markup_linespacing_editing_ || markup_outline_width_editing_) {
+                if (markup_fontsize_editing_) {
+                    if (!markup_fontsize_input_.empty()) {
+                        try {
+                            float val = std::stof(markup_fontsize_input_);
+                            markup_font_size_ = std::clamp(val, 1.0f, 999.0f);
+                            if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                                markup_current_->font_size = markup_font_size_;
+                        } catch (...) {}
+                    }
+                    markup_fontsize_editing_ = false;
+                }
+                if (markup_linespacing_editing_) {
+                    if (!markup_linespacing_input_.empty()) {
+                        try {
+                            float val = std::stof(markup_linespacing_input_);
+                            markup_line_spacing_ = std::clamp(val, 0.5f, 4.0f);
+                            if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                                markup_current_->line_spacing = markup_line_spacing_;
+                        } catch (...) {}
+                    }
+                    markup_linespacing_editing_ = false;
+                }
+                if (markup_outline_width_editing_) {
+                    if (!markup_outline_width_input_.empty()) {
+                        try {
+                            float val = std::stof(markup_outline_width_input_);
+                            markup_outline_width_ = std::clamp(val, 0.5f, 20.0f);
+                            if (markup_current_ && markup_tool_ == MarkupTool::kText)
+                                markup_current_->outline_width = markup_outline_width_;
+                        } catch (...) {}
+                    }
+                    markup_outline_width_editing_ = false;
+                }
+                // Don't return — fall through to handle the canvas click normally
+            }
+            // Consume clicks in the layer panel area (buttons are handled by toolbar hit-test above)
+            if (markup_layer_panel_open_ && ev.x > window_width_ - 220) {
+                return;
+            }
+
+            if (ev.y > Overlay::kToolbarHeight) {
                 int img_x, img_y;
                 win_to_img(ev.x, ev.y, img_x, img_y);
+
+                // --- Selection and move/resize logic ---
+                bool handle_hit = false;
+
+                // Check handles of selected element first (screen-space hit-test)
+                if (markup_selected_idx_ >= 0 &&
+                    markup_selected_idx_ < (int)markup_elements_.size()) {
+                    auto& sel = markup_elements_[markup_selected_idx_];
+                    float bx, by, bw, bh;
+                    if (get_markup_element_bbox(sel, bx, by, bw, bh)) {
+                        int sx1, sy1, sx2, sy2;
+                        img_to_win((int)bx, (int)by, sx1, sy1);
+                        img_to_win((int)(bx + bw), (int)(by + bh), sx2, sy2);
+                        if (sx2 < sx1) std::swap(sx1, sx2);
+                        if (sy2 < sy1) std::swap(sy1, sy2);
+
+                        // Handle positions in screen coords (same 8 as in draw_markup_elements)
+                        int hx[8] = {sx1, sx2, sx1, sx2, (sx1+sx2)/2, sx2, (sx1+sx2)/2, sx1};
+                        int hy[8] = {sy1, sy1, sy2, sy2, sy1, (sy1+sy2)/2, sy2, (sy1+sy2)/2};
+                        int hs = 8;
+
+                        auto save_drag_origin = [&]() {
+                            markup_drag_orig_rect_x_ = sel.rect_x;
+                            markup_drag_orig_rect_y_ = sel.rect_y;
+                            markup_drag_orig_rect_w_ = (sel.type == MarkupTool::kText) ? sel.text_box_w : sel.rect_w;
+                            markup_drag_orig_rect_h_ = sel.rect_h;
+                            markup_drag_orig_points_x_ = sel.points_x;
+                            markup_drag_orig_points_y_ = sel.points_y;
+                            markup_drag_orig_text_x_ = sel.text_x;
+                            markup_drag_orig_text_y_ = sel.text_y;
+                            markup_drag_orig_font_size_ = (sel.type == MarkupTool::kText) ? sel.font_size : 0;
+                        };
+
+                        for (int i = 0; i < 8; i++) {
+                            if (abs(ev.x - hx[i]) < hs && abs(ev.y - hy[i]) < hs) {
+                                markup_drag_active_ = true;
+                                markup_drag_handle_ = i;
+                                markup_drag_start_img_x_ = (float)img_x;
+                                markup_drag_start_img_y_ = (float)img_y;
+                                save_drag_origin();
+                                handle_hit = true;
+                                break;
+                            }
+                        }
+
+                        if (!handle_hit && hit_test_markup_element(sel, (float)img_x, (float)img_y)) {
+                            // Double-click on text → enter edit mode
+                            if (sel.type == MarkupTool::kText &&
+                                last_text_click_idx_ == markup_selected_idx_ &&
+                                ev.time - last_text_click_time_ < 300) {
+                                if (markup_text_editing_) finalize_text_();
+                                auto copy = std::make_unique<MarkupElement>(sel);
+                                markup_text_input_ = copy->text;
+                                copy->text = markup_text_input_;
+                                markup_editing_original_idx_ = markup_selected_idx_;
+                                markup_elements_.erase(
+                                    markup_elements_.begin() + markup_selected_idx_);
+                                markup_current_ = std::move(copy);
+                                markup_text_editing_ = true;
+                                markup_selected_idx_ = -1;
+                                last_text_click_idx_ = -1;
+                                handle_hit = true;
+                                render();
+                            } else {
+                                // Track click for potential double-click
+                                if (sel.type == MarkupTool::kText) {
+                                    last_text_click_idx_ = markup_selected_idx_;
+                                    last_text_click_time_ = ev.time;
+                                } else {
+                                    last_text_click_idx_ = -1;
+                                }
+                                // Start move drag
+                                markup_drag_active_ = true;
+                                markup_drag_handle_ = -1;
+                                markup_drag_start_img_x_ = (float)img_x;
+                                markup_drag_start_img_y_ = (float)img_y;
+                                save_drag_origin();
+                                markup_drag_orig_text_x_ = sel.text_x;
+                                markup_drag_orig_text_y_ = sel.text_y;
+                                handle_hit = true;
+                            }
+                        }
+                    }
+                }
+                if (handle_hit) return;
+
+                // Hit-test all elements (reverse order) for selection
+                for (int i = (int)markup_elements_.size() - 1; i >= 0; i--) {
+                    if (!markup_elements_[i].visible) continue;
+                    if (hit_test_markup_element(markup_elements_[i], (float)img_x, (float)img_y)) {
+                        if (markup_text_editing_) finalize_text_();
+                        markup_selected_idx_ = i;
+                        if (markup_elements_[i].type == MarkupTool::kText &&
+                            last_text_click_idx_ == i &&
+                            ev.time - last_text_click_time_ < 300) {
+                            // Double-click on text → enter edit mode
+                            auto copy = std::make_unique<MarkupElement>(markup_elements_[i]);
+                            markup_text_input_ = copy->text;
+                            copy->text = markup_text_input_;
+                            markup_editing_original_idx_ = i;
+                            markup_elements_.erase(markup_elements_.begin() + i);
+                            markup_current_ = std::move(copy);
+                            markup_text_editing_ = true;
+                            markup_selected_idx_ = -1;
+                            last_text_click_idx_ = -1;
+                            render();
+                            return;
+                        }
+                        if (markup_elements_[i].type == MarkupTool::kText) {
+                            last_text_click_idx_ = i;
+                            last_text_click_time_ = ev.time;
+                        } else {
+                            last_text_click_idx_ = -1;
+                        }
+                        render();
+                        return;
+                    }
+                }
+
+                // --- Normal drawing logic (runs when no element was hit) ---
+                // Save selected index before the deselect block below clears it
+                int saved_sel_idx = markup_selected_idx_;
+
+                // Click on empty area: deselect (always fall through to drawing logic)
+                if (markup_selected_idx_ >= 0) {
+                    markup_selected_idx_ = -1;
+                    render();
+                }
+
+                // Text tool: click to place text cursor
+                if (markup_tool_ == MarkupTool::kText) {
+                    // If editing a text element, check if click is inside its box → reposition cursor
+                    if (markup_text_editing_ && markup_current_ &&
+                        markup_current_->type == MarkupTool::kText) {
+                        float tx = markup_current_->text_x;
+                        float ty = markup_current_->text_y;
+                        // Build a cairo context just for layout measurement
+                        auto* surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+                        auto* tmp = cairo_create(surf);
+                        cairo_select_font_face(tmp, markup_current_->font_family.c_str(),
+                                               CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_NORMAL);
+                        cairo_set_font_size(tmp, markup_current_->font_size);
+                        std::vector<std::string> lines;
+                        std::vector<size_t> line_start;
+                        float line_height;
+                        compute_text_layout(tmp, *markup_current_, lines, line_start, line_height);
+                        float box_w = markup_current_->text_box_w;
+                        // Compute total height
+                        float total_h = std::max(line_height, (float)lines.size() * line_height + 4);
+                        cairo_destroy(tmp);
+                        cairo_surface_destroy(surf);
+
+                        if (img_x >= tx && img_x < tx + box_w &&
+                            img_y >= ty && img_y < ty + total_h) {
+                            // Position cursor at click point
+                            int pos = get_text_cursor_at(*markup_current_, (float)img_x, (float)img_y);
+                            markup_text_cursor_pos_ = pos;
+                            markup_text_sel_start_ = pos; // no selection
+                            markup_text_dragging_ = true;
+                            render();
+                            return;
+                        }
+                        // Click outside → finalize
+                        if (saved_sel_idx >= 0 &&
+                            saved_sel_idx < (int)markup_elements_.size()) {
+                            // Drag-created: sync text to existing element
+                            markup_current_->text = markup_text_input_;
+                            markup_elements_[saved_sel_idx].text = markup_current_->text;
+                        } else {
+                            // Double-click edit: push back
+                            if (!markup_current_->text.empty()) {
+                                if (markup_editing_original_idx_ >= 0 &&
+                                    markup_editing_original_idx_ <= (int)markup_elements_.size()) {
+                                    markup_elements_.insert(
+                                        markup_elements_.begin() + markup_editing_original_idx_,
+                                        std::move(*markup_current_));
+                                } else {
+                                    markup_elements_.push_back(std::move(*markup_current_));
+                                }
+                            }
+                        }
+                        markup_current_.reset();
+                        markup_text_editing_ = false;
+                        markup_text_input_.clear();
+                        markup_text_cursor_pos_ = 0;
+                        markup_text_sel_start_ = -1;
+                        render();
+                        return;
+                    }
+                    auto el = std::make_unique<MarkupElement>();
+                    el->type = MarkupTool::kText;
+                    el->color = markup_color_;
+                    el->text_x = (float)img_x;
+                    el->text_y = (float)img_y;
+                    el->text_box_w = 0;
+                    el->font_size = markup_font_size_;
+                    el->font_family = markup_font_family_;
+                    el->text_shadow = markup_text_shadow_;
+                    el->text_outline = markup_text_outline_;
+                    el->shadow_color = 0x00000080;
+                    el->outline_color = markup_outline_color_;
+                    el->outline_width = markup_outline_width_;
+                    // Add to elements immediately so layer panel shows it
+                    markup_elements_.push_back(*el);
+                    markup_selected_idx_ = (int)markup_elements_.size() - 1;
+                    markup_current_ = std::move(el);
+                    markup_drawing_ = true;
+                    markup_drag_start_x_ = (float)img_x;
+                    markup_drag_start_y_ = (float)img_y;
+                    render();
+                    return;
+                }
+
+                // Finalize any pending text before starting other drawing
+                if (markup_current_ && markup_current_->type == MarkupTool::kText) {
+                    if (markup_text_editing_)
+                        markup_current_->text = markup_text_input_;
+                    if (saved_sel_idx >= 0 &&
+                        saved_sel_idx < (int)markup_elements_.size()) {
+                        // Drag-created: sync to existing element
+                        markup_elements_[saved_sel_idx].text = markup_current_->text;
+                    } else if (!markup_current_->text.empty()) {
+                        // Double-click edit: push back
+                        if (markup_editing_original_idx_ >= 0 &&
+                            markup_editing_original_idx_ <= (int)markup_elements_.size()) {
+                            markup_elements_.insert(
+                                markup_elements_.begin() + markup_editing_original_idx_,
+                                std::move(*markup_current_));
+                        } else {
+                            markup_elements_.push_back(std::move(*markup_current_));
+                        }
+                    }
+                    markup_current_.reset();
+                    markup_text_editing_ = false;
+                    markup_text_input_.clear();
+                    markup_editing_original_idx_ = -1;
+                }
+
                 markup_drawing_ = true;
                 markup_drag_start_x_ = (float)img_x;
                 markup_drag_start_y_ = (float)img_y;
@@ -2190,6 +3261,13 @@ void App::on_pointer(const PointerEvent& ev) {
         if (crop_dragging_) {
             crop_dragging_ = false;
         }
+        if (markup_text_dragging_) {
+            markup_text_dragging_ = false;
+        }
+        if (markup_drag_active_) {
+            markup_drag_active_ = false;
+            render();
+        }
         if (markup_drawing_) {
             markup_drawing_ = false;
             if (markup_current_) {
@@ -2247,8 +3325,28 @@ void App::on_pointer(const PointerEvent& ev) {
                     markup_current_->text = std::to_string(numbered_count_);
                 }
 
-                markup_elements_.push_back(std::move(*markup_current_));
-                markup_current_.reset();
+                //--- Text: keep in elements, enter edit mode ---
+                if (tool == MarkupTool::kText) {
+                    if (markup_current_->text_box_w < 20)
+                        markup_current_->text_box_w = 200;
+                    // Element stays in elements at markup_selected_idx_
+                    // for layer panel visibility; sync dimensions
+                    if (markup_selected_idx_ >= 0 &&
+                        markup_selected_idx_ < (int)markup_elements_.size()) {
+                        auto& s = markup_elements_[markup_selected_idx_];
+                        s.text_x = markup_current_->text_x;
+                        s.text_y = markup_current_->text_y;
+                        s.text_box_w = markup_current_->text_box_w;
+                        s.text_box_h = markup_current_->text_box_h;
+                    }
+                    markup_text_editing_ = true;
+                    markup_text_input_.clear();
+                    markup_text_cursor_pos_ = 0;
+                    markup_text_sel_start_ = -1;
+                } else {
+                    markup_elements_.push_back(std::move(*markup_current_));
+                    markup_current_.reset();
+                }
             }
             render();
         }
@@ -2309,6 +3407,7 @@ void App::on_motion(int x, int y) {
         if (t < 0) t = 0;
         if (t > 1) t = 1;
         markup_color_ = hsv_to_rgb(t * 360.0f, 1.0f, 1.0f);
+        apply_text_format_(markup_color_, 0);
         render();
         return;
     }
@@ -2363,6 +3462,101 @@ void App::on_motion(int x, int y) {
         return;
     }
 
+    // 2.4 Markup move/resize drag
+    // Text selection drag during editing
+    if (markup_text_dragging_ && markup_text_editing_ && markup_current_ &&
+        markup_current_->type == MarkupTool::kText) {
+        int img_x, img_y;
+        win_to_img(x, y, img_x, img_y);
+        int pos = get_text_cursor_at(*markup_current_, (float)img_x, (float)img_y);
+        if (pos != markup_text_cursor_pos_) {
+            markup_text_cursor_pos_ = pos;
+            render();
+        }
+        return;
+    }
+
+    if (markup_active_ && markup_drag_active_ &&
+        markup_selected_idx_ >= 0 &&
+        markup_selected_idx_ < (int)markup_elements_.size()) {
+        int img_x, img_y;
+        win_to_img(x, y, img_x, img_y);
+        float dx = (float)img_x - markup_drag_start_img_x_;
+        float dy = (float)img_y - markup_drag_start_img_y_;
+        auto& el = markup_elements_[markup_selected_idx_];
+
+        if (markup_drag_handle_ == -1) {
+            // Move element
+            switch (el.type) {
+            case MarkupTool::kPen:
+            case MarkupTool::kLine:
+            case MarkupTool::kArrow:
+            case MarkupTool::kNumbered:
+                for (size_t i = 0; i < el.points_x.size(); i++) {
+                    el.points_x[i] = markup_drag_orig_points_x_[i] + dx;
+                    el.points_y[i] = markup_drag_orig_points_y_[i] + dy;
+                }
+                break;
+            case MarkupTool::kRect:
+            case MarkupTool::kEllipse:
+                el.rect_x = markup_drag_orig_rect_x_ + dx;
+                el.rect_y = markup_drag_orig_rect_y_ + dy;
+                break;
+            case MarkupTool::kText:
+                el.text_x = markup_drag_orig_text_x_ + dx;
+                el.text_y = markup_drag_orig_text_y_ + dy;
+                break;
+            default: break;
+            }
+        } else {
+            // Resize: modify rect_x/y/w/h for Rect/Ellipse
+            if (el.type == MarkupTool::kRect || el.type == MarkupTool::kEllipse) {
+                float ox = markup_drag_orig_rect_x_;
+                float oy = markup_drag_orig_rect_y_;
+                float ow = markup_drag_orig_rect_w_;
+                float oh = markup_drag_orig_rect_h_;
+                int h = markup_drag_handle_;
+                // Handle indices: 0=TL, 1=TR, 2=BL, 3=BR, 4=T, 5=R, 6=B, 7=L
+                if (h == 0 || h == 2 || h == 7) { el.rect_x = ox + dx; el.rect_w = ow - dx; }
+                if (h == 1 || h == 3 || h == 5) { el.rect_w = ow + dx; }
+                if (h == 0 || h == 1 || h == 4) { el.rect_y = oy + dy; el.rect_h = oh - dy; }
+                if (h == 2 || h == 3 || h == 6) { el.rect_h = oh + dy; }
+                if (el.rect_w < 4) el.rect_w = 4;
+                if (el.rect_h < 4) el.rect_h = 4;
+            } else if (el.type == MarkupTool::kText) {
+                int h = markup_drag_handle_;
+                // Right-handle group (1, 3, 5): change width
+                if (h == 1 || h == 3 || h == 5) {
+                    float new_w = markup_drag_orig_rect_w_ + dx;
+                    if (new_w < 20) new_w = 20;
+                    el.text_box_w = new_w;
+                }
+                // Left-handle group (0, 2, 7): move x, change width
+                if (h == 0 || h == 2 || h == 7) {
+                    float new_w = markup_drag_orig_rect_w_ - dx;
+                    if (new_w < 20) { new_w = 20; }
+                    else { el.text_x = markup_drag_orig_text_x_ + dx; }
+                    el.text_box_w = new_w;
+                }
+                // Top-handle group (0, 1, 4): move y, scale font
+                if (h == 0 || h == 1 || h == 4) {
+                    el.text_y = markup_drag_orig_text_y_ + dy;
+                    float new_fs = markup_drag_orig_font_size_ - dy;
+                    if (new_fs < 8) new_fs = 8;
+                    el.font_size = new_fs;
+                }
+                // Bottom-handle group (2, 3, 6): scale font
+                if (h == 2 || h == 3 || h == 6) {
+                    float new_fs = markup_drag_orig_font_size_ + dy;
+                    if (new_fs < 8) new_fs = 8;
+                    el.font_size = new_fs;
+                }
+            }
+        }
+        render();
+        return;
+    }
+
     // 2.5 Markup draw
     if (markup_active_ && markup_drawing_ && markup_current_) {
         int img_x, img_y;
@@ -2383,6 +3577,22 @@ void App::on_motion(int x, int y) {
             else { markup_current_->rect_x = (float)img_x; markup_current_->rect_w = -dx; }
             if (dy >= 0) { markup_current_->rect_y = markup_drag_start_y_; markup_current_->rect_h = dy; }
             else { markup_current_->rect_y = (float)img_y; markup_current_->rect_h = -dy; }
+        } else if (tool == MarkupTool::kText) {
+            float dx = (float)img_x - markup_drag_start_x_;
+            float dy = (float)img_y - markup_drag_start_y_;
+            if (dx >= 0) { markup_current_->text_x = markup_drag_start_x_; markup_current_->text_box_w = dx; }
+            else { markup_current_->text_x = (float)img_x; markup_current_->text_box_w = -dx; }
+            if (dy >= 0) { markup_current_->text_y = markup_drag_start_y_; markup_current_->text_box_h = dy; }
+            else { markup_current_->text_y = (float)img_y; markup_current_->text_box_h = -dy; }
+            // Sync to the copy in elements for layer panel
+            if (markup_selected_idx_ >= 0 &&
+                markup_selected_idx_ < (int)markup_elements_.size()) {
+                auto& s = markup_elements_[markup_selected_idx_];
+                s.text_x = markup_current_->text_x;
+                s.text_y = markup_current_->text_y;
+                s.text_box_w = markup_current_->text_box_w;
+                s.text_box_h = markup_current_->text_box_h;
+            }
         }
         render();
         return;

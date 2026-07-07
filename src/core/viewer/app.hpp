@@ -67,12 +67,34 @@ struct MarkupElement {
     // Text
     std::string text;
     float text_x = 0, text_y = 0;
-    float font_size = 16;
+    float text_box_w = 0;  // 0 = single-line, >0 = word-wrap width in image px
+    float text_box_h = 0;  // 0 = auto-compute from content, >0 = fixed box height
+    float font_size = 32;
+    std::string font_family = "sans-serif";
+    bool text_shadow = false;
+    bool text_outline = false;
+    uint32_t shadow_color = 0x00000080;
+    uint32_t outline_color = 0x000000FF;
+    float outline_width = 2.0f;
+
+    float line_spacing = 1.3f;
+
+    // Per-character format overrides: ranges in the raw text string
+    struct FormatSpan {
+        size_t start = 0;
+        size_t end = 0;
+        uint32_t color = 0;
+        float font_size = 0; // 0 = use element default
+    };
+    std::vector<FormatSpan> format_spans;
 
     // Style
     uint32_t color = 0xFF0000FF;  // 0xRRGGBBAA
     float thickness = 3.0f;
     bool filled = false;
+
+    // Layer visibility
+    bool visible = true;
 };
 
 class App {
@@ -279,6 +301,7 @@ private:
     bool markup_active_ = false;
     MarkupTool markup_tool_ = MarkupTool::kPen;
     uint32_t markup_color_ = 0xFF0000FF; // default red, 0xRRGGBBAA
+    uint32_t markup_outline_color_ = 0x000000FF;
     float markup_thickness_ = 3.0f;
     std::vector<MarkupElement> markup_elements_;
     std::unique_ptr<MarkupElement> markup_current_;
@@ -291,6 +314,49 @@ private:
     float hue_bar_x_ = 0, hue_bar_y_ = 0;
     float hue_bar_w_ = 280, hue_bar_h_ = 24;
     int numbered_count_ = 0;
+
+    // Text editing state
+    bool markup_text_editing_ = false;
+    bool markup_font_dropdown_open_ = false;
+    std::string markup_text_input_;
+    float markup_font_size_ = 32.0f;
+    std::string markup_font_family_ = "sans-serif";
+    bool markup_text_shadow_ = false;
+    bool markup_text_outline_ = false;
+    float markup_outline_width_ = 2.0f;
+    float markup_line_spacing_ = 1.3f;
+    int markup_editing_original_idx_ = -1;
+    int markup_text_cursor_pos_ = 0;
+    int markup_text_sel_start_ = -1; // -1 = no selection
+    bool markup_text_dragging_ = false;
+
+    // Font size / line spacing editing state
+    bool markup_fontsize_editing_ = false;
+    std::string markup_fontsize_input_;
+    bool markup_linespacing_editing_ = false;
+    std::string markup_linespacing_input_;
+    bool markup_outline_width_editing_ = false;
+    std::string markup_outline_width_input_;
+
+    // Markup selection & layer panel
+    int markup_selected_idx_ = -1;
+    bool markup_layer_panel_open_ = false;
+    bool markup_drag_active_ = false;
+    int markup_drag_handle_ = -1; // -1 = move body, 0-7 = corner/edge handle
+    float markup_drag_start_img_x_ = 0;
+    float markup_drag_start_img_y_ = 0;
+    float markup_drag_orig_rect_x_ = 0;
+    float markup_drag_orig_rect_y_ = 0;
+    float markup_drag_orig_rect_w_ = 0;
+    float markup_drag_orig_rect_h_ = 0;
+    std::vector<float> markup_drag_orig_points_x_;
+    std::vector<float> markup_drag_orig_points_y_;
+    float markup_drag_orig_text_x_ = 0;
+    float markup_drag_orig_text_y_ = 0;
+    float markup_drag_orig_font_size_ = 0;
+    int markup_layer_hover_idx_ = -1;
+    int last_text_click_idx_ = -1;
+    uint32_t last_text_click_time_ = 0;
 
     // Sidebar
     bool show_sidebar_ = false;
@@ -434,6 +500,18 @@ private:
     void win_to_img(int win_x, int win_y, int& img_x, int& img_y) const;
     void draw_crop_rect(cairo_t* cr, int win_w, int win_h);
     void draw_markup_elements(cairo_t* cr);
+    void draw_markup_layer_panel(cairo_t* cr, int win_w, int win_h,
+                                 std::vector<OverlayButton>& buttons);
+    bool hit_test_markup_element(const MarkupElement& el, float img_x, float img_y) const;
+    bool get_markup_element_bbox(const MarkupElement& el,
+                                 float& x, float& y, float& w, float& h) const;
+    int get_text_cursor_at(const MarkupElement& el, float img_x, float img_y) const;
+    static void compute_text_layout(cairo_t* cr, const MarkupElement& el,
+                                    std::vector<std::string>& out_lines,
+                                    std::vector<size_t>& out_start_pos,
+                                    float& out_line_height);
+    void apply_text_format_(uint32_t color, float font_size);
+    void finalize_text_();
     void write_png_file(const std::string& path);
     void save_dialog_(bool as_copy);
     void gen_thumb_bgra(const std::vector<uint8_t>& rgba, int w, int h,
