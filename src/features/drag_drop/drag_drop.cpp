@@ -35,9 +35,11 @@ void App::handle_data_offer(void* data, wl_data_device* /*device*/, wl_data_offe
 }
 
 void App::handle_data_enter(void* data, wl_data_device* /*device*/, uint32_t serial,
-                             wl_surface* /*surface*/, wl_fixed_t /*x*/, wl_fixed_t /*y*/,
+                             wl_surface* /*surface*/, wl_fixed_t x, wl_fixed_t y,
                              wl_data_offer* /*offer*/) {
     auto& self = *static_cast<App*>(data);
+    self.drag_last_x_ = wl_fixed_to_double(x);
+    self.drag_last_y_ = wl_fixed_to_double(y);
     bool has_uris = false;
     for (auto& mt : self.drag_mime_types_) {
         if (mt == "text/uri-list") { has_uris = true; break; }
@@ -50,8 +52,10 @@ void App::handle_data_enter(void* data, wl_data_device* /*device*/, uint32_t ser
 void App::handle_data_leave(void* /*data*/, wl_data_device* /*device*/) {}
 
 void App::handle_data_motion(void* data, wl_data_device* /*device*/,
-                              uint32_t /*time*/, wl_fixed_t /*x*/, wl_fixed_t /*y*/) {
+                              uint32_t /*time*/, wl_fixed_t x, wl_fixed_t y) {
     auto& self = *static_cast<App*>(data);
+    self.drag_last_x_ = wl_fixed_to_double(x);
+    self.drag_last_y_ = wl_fixed_to_double(y);
     if (self.drag_offer_) {
         wl_data_offer_set_actions(self.drag_offer_,
                                   WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY,
@@ -98,7 +102,13 @@ void App::handle_data_drop(void* data, wl_data_device* /*device*/) {
                 path += uri[i];
             }
         }
-        if (!path.empty()) self.open_file(path);
+        if (!path.empty()) {
+            if (self.markup_active_) {
+                self.add_image_layer(path, self.drag_last_x_, self.drag_last_y_);
+            } else {
+                self.open_file(path);
+            }
+        }
     }
 }
 

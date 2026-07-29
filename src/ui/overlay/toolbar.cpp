@@ -4,7 +4,8 @@ namespace hpv {
 
 void Overlay::render_toolbar(cairo_t* cr, int win_w, int win_h,
                              std::vector<OverlayButton>& buttons,
-                             int hovered_idx, int pressed_idx, float bg_alpha) {
+                             int hovered_idx, int pressed_idx, float bg_alpha,
+                             bool markup_active) {
     (void)win_h;
     (void)bg_alpha;
     int h = kToolbarHeight;
@@ -84,7 +85,7 @@ void Overlay::render_toolbar(cairo_t* cr, int win_w, int win_h,
         btn_idx++;
     }
 
-    // Right-justified: Copy, Panel, Menu, Settings, Info (right to left)
+    // Right-justified: Copy, Panel, Upload, Menu, Info, Edit, Settings (right to left)
     int rj_x = win_w - 4;
     rj_x -= btn_size; // Settings is rightmost
     draw_button(rj_x, btn_y, btn_size, kSettingsIconIdx, btn_idx);
@@ -109,6 +110,56 @@ void Overlay::render_toolbar(cairo_t* cr, int win_w, int win_h,
     rj_x -= btn_size + 4;
     draw_button(rj_x, btn_y, btn_size, kCopyIconIdx, btn_idx);
     buttons.push_back({rj_x, btn_y, btn_size, btn_size, kIconLabels[kCopyIconIdx], {}, {}});
+    btn_idx++;
+    // Divider
+    rj_x -= group_gap;
+    // Edit button with active highlight
+    int edit_icon = 12;
+    {
+        int ex = rj_x - btn_size;
+        int ey = btn_y;
+        int esize = btn_size;
+        float cr2 = esize * 0.22f;
+        if (markup_active) {
+            cairo_set_source_rgba(cr, m3::primary_container_r, m3::primary_container_g,
+                                  m3::primary_container_b, 1.0);
+            draw_rounded_rect(cr, ex, ey, esize, esize, cr2);
+            cairo_fill(cr);
+        }
+        if (btn_idx == hovered_idx && btn_idx != pressed_idx && !markup_active) {
+            cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                  m3::on_surface_variant_b, 0.08);
+            draw_rounded_rect(cr, ex + 1, ey + 1, esize - 2, esize - 2, cr2);
+            cairo_fill(cr);
+        }
+        if (btn_idx == pressed_idx) {
+            cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                  m3::on_surface_variant_b, 0.12);
+            draw_rounded_rect(cr, ex + 1, ey + 1, esize - 2, esize - 2, cr2);
+            cairo_fill(cr);
+        }
+        // Icon
+        cairo_surface_t* icon = icon_surfaces_[edit_icon];
+        if (icon) {
+            int iw = cairo_image_surface_get_width(icon);
+            int ih = cairo_image_surface_get_height(icon);
+            double iscale = std::min((double)(esize - icon_pad * 2) / iw,
+                                     (double)(esize - icon_pad * 2) / ih);
+            if (iscale > 0) {
+                cairo_save(cr);
+                cairo_translate(cr,
+                    ex + (esize - (int)(iw * iscale)) / 2,
+                    ey + (esize - (int)(ih * iscale)) / 2);
+                cairo_scale(cr, iscale, iscale);
+                cairo_set_source_rgba(cr, m3::on_surface_variant_r, m3::on_surface_variant_g,
+                                      m3::on_surface_variant_b, markup_active ? 1.0 : 1.0);
+                cairo_mask_surface(cr, icon, 0, 0);
+                cairo_restore(cr);
+            }
+        }
+        buttons.push_back({ex, ey, esize, esize, kIconLabels[edit_icon], {}, {}});
+        btn_idx++;
+    }
 }
 
 } // namespace hpv

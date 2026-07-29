@@ -46,7 +46,7 @@ constexpr xdg_wm_base_listener xdg_wm_base_listener_ = {
 constexpr wp_image_description_v1_listener cm_img_desc_listener_ = {
     .failed = WaylandConnection::cm_output_img_desc_failed,
     .ready = WaylandConnection::cm_output_img_desc_ready,
-    .ready2 = nullptr,
+    .ready2 = WaylandConnection::cm_output_img_desc_ready2,
 };
 
 // Image description info listeners
@@ -308,6 +308,15 @@ void WaylandConnection::fetch_display_icc_profile() {
 
 void WaylandConnection::cm_output_img_desc_ready(void* data, wp_image_description_v1* desc,
                                                     uint32_t /*identity*/) {
+    auto* self = static_cast<WaylandConnection*>(data);
+    wp_image_description_info_v1* info = wp_image_description_v1_get_information(desc);
+    wp_image_description_info_v1_add_listener(info, &cm_img_desc_info_listener_, self);
+    wp_image_description_v1_destroy(desc);
+    // Don't mark ready yet — wait for icc_file + done
+}
+
+void WaylandConnection::cm_output_img_desc_ready2(void* data, wp_image_description_v1* desc,
+                                                     uint32_t /*identity_hi*/, uint32_t /*identity_lo*/) {
     auto* self = static_cast<WaylandConnection*>(data);
     wp_image_description_info_v1* info = wp_image_description_v1_get_information(desc);
     wp_image_description_info_v1_add_listener(info, &cm_img_desc_info_listener_, self);

@@ -24,7 +24,7 @@ inline constexpr int kIconCodepoints[] = {
     0xE88E, // info             → Info
     0xE945, // crop             → Crop
     0xE5D3, // more_vert        → Menu
-    0xE746, // draw             → Draw
+    0xE746, // draw             → Edit
     0xE419, // rotate_right     → RotR (mirrored from same glyph as RotL)
     0xE419, // rotate_left      → RotL
     0xE5C8, // flip             → Flip
@@ -37,7 +37,7 @@ inline constexpr int kIconCodepoints[] = {
     0,      // upload (SVG)
 };
 inline constexpr const char* kIconLabels[] = {
-    "Open", "<", ">", "+", "-", "Fit", "Full", "Play", "Gear", "Info", "Crop", "Menu", "Draw",
+    "Open", "<", ">", "+", "-", "Fit", "Full", "Play", "Gear", "Info", "Crop", "Menu", "Edit",
     "RotR", "RotL", "Flip",
     "Screen", "Window", "Focused", "Selection", "Copy", "Panel", "Upload",
 };
@@ -55,7 +55,6 @@ inline constexpr int8_t kToolbarLayout[] = {
     7,      // play_arrow
     -1,     // spacer
     10,     // crop
-    12,     // draw (markup)
     -1,     // spacer
     13,     // rotate_cw
     14,     // rotate_ccw
@@ -125,7 +124,7 @@ public:
     void render_toolbar(cairo_t* cr, int win_w, int win_h,
                         std::vector<OverlayButton>& buttons,
                         int hovered_idx = -1, int pressed_idx = -1,
-                        float bg_alpha = 1.0f);
+                        float bg_alpha = 1.0f, bool markup_active = false);
     void render_settings_popup(cairo_t* cr, int win_w, int win_h,
                                 OverlayState& state, std::vector<OverlayButton>& buttons,
                                 M3Slider& bg_alpha_slider,

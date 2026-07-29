@@ -118,6 +118,11 @@ bool App::get_markup_element_bbox(const MarkupElement& el,
         w = r * 2; h = r * 2;
         return true;
     }
+    case MarkupTool::kImage: {
+        x = el.rect_x; y = el.rect_y;
+        w = el.rect_w; h = el.rect_h;
+        return w > 0 && h > 0;
+    }
     default:
         return false;
     }
@@ -596,6 +601,24 @@ void App::draw_markup_elements(cairo_t* cr) {
         }
     };
 
+    auto draw_image = [&](const MarkupElement& el) {
+        if (!el.image_data) return;
+        auto& img = *el.image_data;
+        if (img.rgba.empty() || img.width <= 0 || img.height <= 0) return;
+        cairo_save(cr);
+        cairo_translate(cr, el.rect_x, el.rect_y);
+        cairo_scale(cr, el.rect_w / img.width, el.rect_h / img.height);
+        cairo_surface_t* surf = cairo_image_surface_create_for_data(
+            img.rgba.data(), CAIRO_FORMAT_ARGB32,
+            img.width, img.height, img.stride);
+        if (surf) {
+            cairo_set_source_surface(cr, surf, 0, 0);
+            cairo_paint(cr);
+            cairo_surface_destroy(surf);
+        }
+        cairo_restore(cr);
+    };
+
     auto draw_one = [&](const MarkupElement& el) {
         set_color(el);
         switch (el.type) {
@@ -606,6 +629,7 @@ void App::draw_markup_elements(cairo_t* cr) {
         case MarkupTool::kEllipse: draw_ellipse(el); break;
         case MarkupTool::kNumbered: draw_numbered(el); break;
         case MarkupTool::kText: draw_text(el); break;
+        case MarkupTool::kImage: draw_image(el); break;
         default: draw_pen(el); break;
         }
     };
@@ -717,6 +741,52 @@ void App::undo_markup() {
             markup_selected_idx_ = (int)markup_elements_.size() - 1;
         render();
     }
+}
+
+void App::add_image_layer(const std::string& path, double win_x, double win_y) {
+    FILE* f = fopen(path.c_str(), "rb");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    size_t size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    std::vector<uint8_t> buf(size);
+    if (fread(buf.data(), 1, size, f) != size) {
+        fclose(f);
+        return;
+    }
+    fclose(f);
+
+    auto result = decoders_.decode(buf.data(), buf.size(), 0, 0);
+    if (result.pixels.empty()) return;
+
+    auto el = std::make_unique<MarkupElement>();
+    el->type = MarkupTool::kImage;
+    el->image_data = std::make_shared<DecodedImage>();
+    el->image_data->rgba = std::move(result.pixels);
+    el->image_data->width = result.width;
+    el->image_data->height = result.height;
+    el->image_data->stride = result.width * 4;
+
+    // Position at drop point in image coords
+    int img_x, img_y;
+    win_to_img((int)win_x, (int)win_y, img_x, img_y);
+    float scale = 0.3f; // Scale to 30% of original image width
+    float aspect = (float)result.height / (float)result.width;
+    float w = std::min((float)decoded_image_.width * scale, (float)result.width);
+    float h = w * aspect;
+    if (h > (float)decoded_image_.height * scale) {
+        h = (float)decoded_image_.height * scale;
+        w = h / aspect;
+    }
+    el->rect_x = (float)img_x - w / 2;
+    el->rect_y = (float)img_y - h / 2;
+    el->rect_w = w;
+    el->rect_h = h;
+
+    markup_elements_.push_back(*el);
+    markup_selected_idx_ = (int)markup_elements_.size() - 1;
+    markup_current_ = std::move(el);
+    render();
 }
 
 void App::finalize_text_() {

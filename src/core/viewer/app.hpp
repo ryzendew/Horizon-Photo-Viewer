@@ -51,7 +51,7 @@ struct DecodedImage {
 
 enum class MarkupTool {
     kPen, kLine, kArrow, kRect, kEllipse,
-    kText, kHighlight, kBlur, kNumbered, kEraser
+    kText, kHighlight, kBlur, kNumbered, kEraser, kImage
 };
 
 struct MarkupElement {
@@ -92,6 +92,9 @@ struct MarkupElement {
     uint32_t color = 0xFF0000FF;  // 0xRRGGBBAA
     float thickness = 3.0f;
     bool filled = false;
+
+    // Image layer
+    std::shared_ptr<DecodedImage> image_data;
 
     // Layer visibility
     bool visible = true;
@@ -149,6 +152,7 @@ public:
     void toggle_markup();
     void commit_markup();
     void cancel_markup();
+    void add_image_layer(const std::string& path, double win_x, double win_y);
     void undo_markup();
     void set_bg_alpha(float a);
     void set_slideshow_interval(int ms);
@@ -208,6 +212,8 @@ private:
     wl_data_device* data_device_ = nullptr;
     wl_data_offer* drag_offer_ = nullptr;
     std::vector<std::string> drag_mime_types_;
+    double drag_last_x_ = 0;
+    double drag_last_y_ = 0;
 
     // Rendering — double-buffered
     ShmBuffer bufs_[2];

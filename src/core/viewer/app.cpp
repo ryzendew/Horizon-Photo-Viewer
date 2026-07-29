@@ -572,7 +572,7 @@ void App::present() {
 
     if (show_toolbar_) {
         overlay_.render_toolbar(cr, win_w, win_h, toolbar_buttons_,
-                                toolbar_hover_idx_, toolbar_press_idx_, bg_alpha_);
+                                toolbar_hover_idx_, toolbar_press_idx_, bg_alpha_, markup_active_);
         // Fill in button actions after render_toolbar populates geometries
         for (auto& btn : toolbar_buttons_) {
             if (btn.label == "Open") { btn.action = [this]() {
@@ -599,7 +599,7 @@ void App::present() {
                 btn.tooltip = "Toggle sidebar";
             }
             else if (btn.label == "Crop") { btn.action = [this]() { toggle_crop(); }; btn.tooltip = "Crop image"; }
-            else if (btn.label == "Draw") { btn.action = [this]() { toggle_markup(); }; btn.tooltip = "Draw on image"; }
+            else if (btn.label == "Edit") { btn.action = [this]() { toggle_markup(); }; btn.tooltip = "Edit image (markup mode)"; }
             else if (btn.label == "RotR") { btn.action = [this]() { rotate_90_cw(); }; btn.tooltip = "Rotate 90\u00B0 CW"; }
             else if (btn.label == "RotL") { btn.action = [this]() { rotate_90_ccw(); }; btn.tooltip = "Rotate 90\u00B0 CCW"; }
             else if (btn.label == "Flip") { btn.action = [this]() { flip_horizontal(); }; btn.tooltip = "Flip horizontally"; }
@@ -1819,7 +1819,7 @@ void App::present() {
     }
 
     // --- Thumbnail strip (pushed below content area) ---
-    if (strip_visible && decoded_image_.width > 0 && dir_images_.size() > 1) {
+    if (strip_visible && !markup_active_ && decoded_image_.width > 0 && dir_images_.size() > 1) {
         if (thumb_dirty_ || cached_strip_w_ != content_w) {
             destroy_cached_strip();
             cached_strip_w_ = content_w;
